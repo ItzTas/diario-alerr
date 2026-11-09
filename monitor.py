@@ -1,11 +1,3 @@
-"""Watch the ALE-RR Diário Oficial and alert whenever a watched term shows up on any page.
-
-Every cycle lists the PDFs uploaded to diarios.al.rr.leg.br through its WordPress REST API,
-extracts the text of each new edition with pdftotext and searches every page for WATCH_TERMS
-(accent- and case-insensitive). Matches become alerts, delivered to Telegram and exposed as an
-RSS feed at /feed.xml. State lives in DATA_DIR/state.json.
-"""
-
 from __future__ import annotations
 
 import html
@@ -35,12 +27,10 @@ SITE_URL = "https://diarios.al.rr.leg.br"
 USER_AGENT = "diario-alerr-monitor/1.0"
 PER_PAGE = 100
 HTTP_TIMEOUT = 60
-# WordPress filters `after` by the site's local date, not UTC, so look back a day and dedupe by id.
 CURSOR_OVERLAP = timedelta(days=1)
 MAX_SEEN = 1000
 MAX_ALERTS = 100
 SNIPPET_RADIUS = 160
-# pdftotext on a 100-page edition takes ~100 MB, so keep the fan-out small for the Pi.
 SCAN_WORKERS = 2
 
 log = logging.getLogger("diario-alerr")
@@ -166,7 +156,6 @@ class Store:
 
 
 def normalize(text: str) -> str:
-    """Uppercase, strip accents and collapse whitespace, so 'José\\n da Silva' matches 'JOSE DA SILVA'."""
     decomposed = unicodedata.normalize("NFKD", text)
     stripped = "".join(char for char in decomposed if not unicodedata.combining(char))
     return " ".join(stripped.upper().split())
@@ -208,7 +197,6 @@ def extract_pages(pdf: bytes) -> list[str]:
             check=True,
             timeout=300,
         )
-    # pdftotext separates pages with a form feed
     return result.stdout.decode("utf-8", errors="replace").split("\f")
 
 
@@ -248,8 +236,6 @@ def build_alert(edition: Edition, hits: Hits) -> Alert:
 
 
 def scan_new_editions(config: Config, state: State) -> bool:
-    """Scan editions newer than the cursor, oldest first. Stops at the first edition it can't read,
-    leaving it (and everything after it) for the next cycle."""
     try:
         editions = list_editions(state.cursor - CURSOR_OVERLAP)
     except (URLError, TimeoutError, json.JSONDecodeError) as err:
@@ -311,7 +297,6 @@ def deliver_pending(config: Config, state: State) -> None:
         try:
             send_telegram(config, alert)
         except (URLError, TimeoutError) as err:
-            # the token is part of the URL, so log only the reason, never the request
             reason = getattr(err, "reason", err)
             log.warning("telegram delivery failed, retrying next cycle: %s", reason)
             return
@@ -354,12 +339,11 @@ def start_http_server(config: Config, store: Store, started: datetime) -> None:
     routes = {"/feed.xml": feed, "/healthz": health}
 
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802 (http.server naming)
+        def do_GET(self) -> None:
             route = routes.get(self.path.split("?")[0])
             if route is None:
                 self.send_error(404)
                 return
-            # the main loop replaces state.json atomically, so reading it here needs no lock
             status, content_type, body = route(store.load(config.start_after))
             encoded = body.encode()
             self.send_response(status)
@@ -369,7 +353,7 @@ def start_http_server(config: Config, store: Store, started: datetime) -> None:
             _ = self.wfile.write(encoded)
 
         @override
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        def log_message(self, format: str, *args: object) -> None:
             pass
 
     server = ThreadingHTTPServer(("0.0.0.0", config.http_port), Handler)
