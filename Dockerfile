@@ -2,10 +2,10 @@ FROM --platform=$BUILDPLATFORM golang:1.27.2-alpine3.24 AS build
 
 WORKDIR /src
 
-COPY go.* ./
+COPY go.mod go.sum ./
 RUN go mod download
 
-COPY *.go ./
+COPY . .
 ARG TARGETOS TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
       -trimpath \

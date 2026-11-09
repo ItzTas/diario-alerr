@@ -14,14 +14,16 @@ linters:
         - -ST1000
   exclusions:
     rules:
-      - path: _test\.go$
+      - path: (_test\.go$|[a-z]+test/)
         linters:
           - gosec
-      - path: diario\.go
+      - path: internal/gazette/pdf\.go
         text: G204
         linters:
           - gosec
-      - path: state\.go
+      - path: internal/watch/statefile\.go
         text: G304
         linters:
           - gosec
+    paths:
+      - internal/db
