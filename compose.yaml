@@ -1,0 +1,40 @@
+x-arcane:
+  urls:
+    - http://diario.lan
+    - https://diarios.al.rr.leg.br
+
+# Watches the ALE-RR Diário Oficial (diarios.al.rr.leg.br) and alerts whenever WATCH_TERMS show up on
+# any page of a new edition: Telegram message plus an RSS feed at https://${PUBLIC_HOST}/feed.xml.
+# Image built from ./Dockerfile (python + poppler's pdftotext).
+# PUBLIC_HOST, WATCH_TERMS and the Telegram bot token/chat id live in ./.env (mode 600), see .env.example.
+services:
+  diario-alerr:
+    build: .
+    image: local/diario-alerr:1
+    cpus: "0.5"
+    mem_limit: 256m
+    container_name: diario-alerr
+    # the `stacks` user (uid 2000, no shell, no sudo), not root; the diario-data volume is owned by it
+    user: "2000:2000"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    env_file: .env
+    environment:
+      TZ: ${TZ:-America/Boa_Vista}
+      PUBLIC_URL: https://${PUBLIC_HOST:?set PUBLIC_HOST in .env}
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8087}:8080"
+    volumes:
+      - diario-data:/data
+    labels:
+      caddy: http://diario.lan, ${PUBLIC_HOST:?set PUBLIC_HOST in .env}
+      caddy.reverse_proxy: 127.0.0.1:${APP_PORT:-8087}
+
+volumes:
+  diario-data:
