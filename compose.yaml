@@ -3,17 +3,12 @@ x-arcane:
     - http://diario.lan
     - https://diarios.al.rr.leg.br
 
-# Watches the ALE-RR Diário Oficial (diarios.al.rr.leg.br) and alerts whenever WATCH_TERMS show up on
-# any page of a new edition: Telegram message plus an RSS feed at https://${PUBLIC_HOST}/feed.xml.
-# Image published to GHCR by .github/workflows/docker.yml (python + poppler's pdftotext).
-# PUBLIC_HOST, WATCH_TERMS and the Telegram bot token/chat id live in ./.env (mode 600), see .env.example.
 services:
   diario-alerr:
     image: ghcr.io/itztas/diario-alerr:${DIARIO_ALERR_TAG:-latest}
     cpus: "0.5"
     mem_limit: 256m
     container_name: diario-alerr
-    # the `stacks` user (uid 2000, no shell, no sudo), not root; the diario-data volume is owned by it
     user: "2000:2000"
     restart: unless-stopped
     read_only: true
