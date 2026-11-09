@@ -11,6 +11,7 @@ import time
 import unicodedata
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -52,6 +53,9 @@ class Config:
     terms: tuple[str, ...]
     telegram_token: str
     telegram_chat_id: str
+    ntfy_url: str
+    ntfy_topic: str
+    ntfy_token: str
     interval: timedelta
     start_after: datetime
     data_dir: Path
@@ -67,6 +71,9 @@ class Config:
             terms=terms,
             telegram_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
             telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", ""),
+            ntfy_url=os.environ.get("NTFY_URL", "").rstrip("/"),
+            ntfy_topic=os.environ.get("NTFY_TOPIC", "diario-alerr"),
+            ntfy_token=os.environ.get("NTFY_TOKEN", ""),
             interval=timedelta(minutes=float(os.environ.get("CHECK_INTERVAL_MINUTES", "30"))),
             start_after=parse_start_after(os.environ.get("START_AFTER", "")),
             data_dir=Path(os.environ.get("DATA_DIR", "/data")),
@@ -113,7 +120,7 @@ class Alert:
     link: str
     body: str
     published: str
-    telegram_sent: bool = False
+    delivered: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -288,19 +295,50 @@ def send_telegram(config: Config, alert: Alert) -> None:
         pass
 
 
-def deliver_pending(config: Config, state: State) -> None:
-    if not (config.telegram_token and config.telegram_chat_id):
-        return
-    for alert in state.alerts:
-        if alert.telegram_sent:
+def send_ntfy(config: Config, alert: Alert) -> None:
+    payload = json.dumps({
+        "topic": config.ntfy_topic,
+        "title": alert.title,
+        "message": alert.body,
+        "click": alert.link,
+        "tags": ["rotating_light"],
+        "priority": 3 if alert.id == "welcome" else 5,
+    }).encode()
+    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
+    if config.ntfy_token:
+        headers["Authorization"] = f"Bearer {config.ntfy_token}"
+    request = urllib.request.Request(config.ntfy_url, data=payload, headers=headers)
+    with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT):
+        pass
+
+
+Sender = Callable[[Config, Alert], None]
+
+
+def enabled_channels(config: Config) -> dict[str, Sender]:
+    channels: dict[str, tuple[bool, Sender]] = {
+        "telegram": (bool(config.telegram_token and config.telegram_chat_id), send_telegram),
+        "ntfy": (bool(config.ntfy_url and config.ntfy_topic), send_ntfy),
+    }
+    return {name: send for name, (enabled, send) in channels.items() if enabled}
+
+
+def deliver_channel(config: Config, alerts: list[Alert], name: str, send: Sender) -> None:
+    for alert in alerts:
+        if name in alert.delivered:
             continue
         try:
-            send_telegram(config, alert)
+            send(config, alert)
         except (URLError, TimeoutError) as err:
             reason = getattr(err, "reason", err)
-            log.warning("telegram delivery failed, retrying next cycle: %s", reason)
+            log.warning("%s delivery failed, retrying next cycle: %s", name, reason)
             return
-        alert.telegram_sent = True
+        alert.delivered.append(name)
+
+
+def deliver_pending(config: Config, state: State, channels: dict[str, Sender]) -> None:
+    for name, send in channels.items():
+        deliver_channel(config, state.alerts, name, send)
 
 
 def render_item(alert: Alert) -> str:
@@ -374,8 +412,9 @@ def welcome_alert(config: Config) -> Alert:
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = Config.from_env()
-    if not (config.telegram_token and config.telegram_chat_id):
-        log.warning("TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set: alerts go to the RSS feed only")
+    channels = enabled_channels(config)
+    if not channels:
+        log.warning("no Telegram or ntfy configured: alerts go to the RSS feed only")
     store = Store(config.data_dir / "state.json")
     first_run = not store.exists()
     state = store.load(config.start_after)
@@ -384,11 +423,11 @@ def main() -> None:
         store.save(state)
     started = datetime.now(UTC)
     start_http_server(config, store, started)
-    log.info("watching %s every %s", ", ".join(config.terms), config.interval)
+    log.info("watching %s every %s, notifying %s", ", ".join(config.terms), config.interval, ", ".join(channels) or "RSS only")
     while True:
         if scan_new_editions(config, state):
             state.last_success = datetime.now(UTC)
-        deliver_pending(config, state)
+        deliver_pending(config, state, channels)
         store.save(state)
         time.sleep(config.interval.total_seconds())
 
