@@ -1,0 +1,7 @@
+go = "1.27.2"
+
+[settings]
+auto-install = true
+telemetry = false
+unstable-lockfile = true
+auto-clean = true
