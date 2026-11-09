@@ -2,3 +2,7 @@
 *.md
 .git
 .github
+.claude
+.githooks
+tmp
+diario-alerr

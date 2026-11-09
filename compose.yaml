@@ -26,9 +26,40 @@ services:
       - "${BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-8087}:8080"
     volumes:
       - diario-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     labels:
       caddy: http://diario.lan, ${PUBLIC_HOST:?set PUBLIC_HOST in .env}
       caddy.reverse_proxy: 127.0.0.1:${APP_PORT:-8087}
 
+  postgres:
+    image: postgres:18-alpine
+    cpus: "0.5"
+    mem_limit: 256m
+    container_name: diario-alerr-postgres
+    user: "70:70"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      POSTGRES_DB: diario_alerr
+      POSTGRES_USER: diario_alerr
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - diario-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U diario_alerr -d diario_alerr"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
 volumes:
   diario-data:
+  diario-postgres:

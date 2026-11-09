@@ -1,0 +1,6 @@
+env_files = [".env"]
+
+[build]
+cmd = "go build -o ./tmp/main ."
+entrypoint = ["./tmp/main"]
+exclude_dir = ["tmp", "internal/db"]
