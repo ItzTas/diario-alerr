@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -101,6 +102,6 @@ impl<G: Gazette> Scheduler<G> {
 }
 
 fn crashed(failure: JoinError) -> CycleOutcome {
-    error!(error = %failure, "{CYCLE_CRASHED}");
+    error!(error = &failure as &dyn Error, "{CYCLE_CRASHED}");
     CycleOutcome::Incomplete(CYCLE_CRASHED.to_owned())
 }
