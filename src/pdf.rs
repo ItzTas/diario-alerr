@@ -12,6 +12,8 @@ use tokio::process::{Child, Command};
 use crate::gazette::{GazetteError, get};
 
 pub(crate) const PDF_TIMEOUT: Duration = Duration::from_secs(300);
+const MAX_PDF_BYTES: usize = 256 << 20;
+const MAX_TEXT_BYTES: usize = 64 << 20;
 const STDERR_LIMIT: usize = 32 << 10;
 const EXCERPT_CHARS: usize = 200;
 
@@ -19,21 +21,31 @@ pub(crate) async fn download_pages(
     http: &reqwest::Client,
     url: &str,
 ) -> Result<Vec<String>, GazetteError> {
-    download_pages_in(http, url, &std::env::temp_dir()).await
+    download_pages_in(http, url, &std::env::temp_dir(), MAX_PDF_BYTES).await
 }
 
 async fn download_pages_in(
     http: &reqwest::Client,
     url: &str,
     dir: &Path,
+    max_bytes: usize,
 ) -> Result<Vec<String>, GazetteError> {
     let response = get(http, url).await?;
+    if response
+        .content_length()
+        .is_some_and(|length| length > max_bytes as u64)
+    {
+        return Err(GazetteError::PdfTooLarge {
+            url: url.to_owned(),
+            limit: max_bytes,
+        });
+    }
     let file = tempfile::Builder::new()
         .prefix("edition-")
         .suffix(".pdf")
         .tempfile_in(dir)
         .map_err(|error| GazetteError::CreateTempFile(without_path(error)))?;
-    save(response, url, &file).await?;
+    save(response, url, &file, max_bytes).await?;
     extract_pages(file.path()).await
 }
 
@@ -45,12 +57,18 @@ fn without_path(error: io::Error) -> io::Error {
     io::Error::new(error.kind(), cause)
 }
 
-async fn save(mut response: Response, url: &str, file: &NamedTempFile) -> Result<(), GazetteError> {
+async fn save(
+    mut response: Response,
+    url: &str,
+    file: &NamedTempFile,
+    max_bytes: usize,
+) -> Result<(), GazetteError> {
     let write_error = |source| GazetteError::WriteTempFile {
         file: file_name(file.path()),
         source,
     };
     let mut out = tokio::fs::File::from_std(file.as_file().try_clone().map_err(write_error)?);
+    let mut written = 0;
     while let Some(chunk) = response
         .chunk()
         .await
@@ -59,6 +77,13 @@ async fn save(mut response: Response, url: &str, file: &NamedTempFile) -> Result
             source,
         })?
     {
+        written += chunk.len();
+        if written > max_bytes {
+            return Err(GazetteError::PdfTooLarge {
+                url: url.to_owned(),
+                limit: max_bytes,
+            });
+        }
         out.write_all(&chunk).await.map_err(write_error)?;
     }
     out.flush().await.map_err(write_error)
@@ -73,13 +98,14 @@ fn file_name(path: &Path) -> String {
 pub(crate) async fn extract_pages(path: &Path) -> Result<Vec<String>, GazetteError> {
     let mut command = Command::new("pdftotext");
     command.args(["-enc", "UTF-8"]).arg(path).arg("-");
-    run(command, path, PDF_TIMEOUT).await
+    run(command, path, PDF_TIMEOUT, MAX_TEXT_BYTES).await
 }
 
 async fn run(
     mut command: Command,
     path: &Path,
     limit: Duration,
+    max_text: usize,
 ) -> Result<Vec<String>, GazetteError> {
     command
         .stdin(Stdio::null())
@@ -90,14 +116,17 @@ async fn run(
         let program = command.as_std().get_program().to_string_lossy();
         GazetteError::Pdftotext(format!("exec: {program:?}: {error}"))
     })?;
-    let Ok(output) = tokio::time::timeout(limit, collect(&mut child)).await else {
+    let outcome = tokio::time::timeout(limit, collect(&mut child, max_text))
+        .await
+        .unwrap_or_else(|_| {
+            Err(GazetteError::Pdftotext(format!(
+                "timed out after {limit:?}"
+            )))
+        });
+    if outcome.is_err() {
         stop(&mut child).await?;
-        return Err(GazetteError::Pdftotext(format!(
-            "timed out after {limit:?}"
-        )));
-    };
-    let (stdout, stderr, status) =
-        output.map_err(|error| GazetteError::Pdftotext(error.to_string()))?;
+    }
+    let (stdout, stderr, status) = outcome?;
     if !status.success() {
         return Err(GazetteError::Pdftotext(failure(status, &stderr, path)));
     }
@@ -107,14 +136,42 @@ async fn run(
         .collect())
 }
 
-async fn collect(child: &mut Child) -> io::Result<(Vec<u8>, Vec<u8>, ExitStatus)> {
+async fn collect(
+    child: &mut Child,
+    max_text: usize,
+) -> Result<(Vec<u8>, Vec<u8>, ExitStatus), GazetteError> {
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
+    let pipe_error = |error: io::Error| GazetteError::Pdftotext(error.to_string());
     tokio::try_join!(
-        read_prefix(stdout, usize::MAX),
-        read_prefix(stderr, STDERR_LIMIT),
-        child.wait()
+        read_text(stdout, max_text),
+        async { read_prefix(stderr, STDERR_LIMIT).await.map_err(pipe_error) },
+        async { child.wait().await.map_err(pipe_error) },
     )
+}
+
+async fn read_text(
+    pipe: Option<impl AsyncRead + Unpin>,
+    limit: usize,
+) -> Result<Vec<u8>, GazetteError> {
+    let mut text = Vec::new();
+    let Some(mut pipe) = pipe else {
+        return Ok(text);
+    };
+    let mut buffer = [0; 8192];
+    loop {
+        let read = pipe
+            .read(&mut buffer)
+            .await
+            .map_err(|error| GazetteError::Pdftotext(error.to_string()))?;
+        if read == 0 {
+            return Ok(text);
+        }
+        if text.len() + read > limit {
+            return Err(GazetteError::TooMuchText { limit });
+        }
+        text.extend_from_slice(&buffer[..read]);
+    }
 }
 
 async fn read_prefix(pipe: Option<impl AsyncRead + Unpin>, limit: usize) -> io::Result<Vec<u8>> {
@@ -229,7 +286,7 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
     use tokio::process::Command;
 
-    use super::{download_pages_in, failure, run};
+    use super::{MAX_PDF_BYTES, MAX_TEXT_BYTES, download_pages_in, failure, run};
     use crate::gazette::GazetteError;
 
     const FAKE_PDF: &[u8] = include_bytes!(concat!(
@@ -325,15 +382,33 @@ mod tests {
         (!pid.is_empty() && pid.ends_with(|c: char| c.is_ascii_digit())).then(|| pid.to_owned())
     }
 
-    fn sleeper(pid_file: &Path) -> Command {
+    fn recording_pid(pid_file: &Path, program: &str) -> Command {
         let mut command = Command::new("sh");
         command.arg("-c").arg(format!(
-            "echo $$ > '{}.tmp' && mv '{}.tmp' '{}' && exec sleep 30",
+            "echo $$ > '{}.tmp' && mv '{}.tmp' '{}' && exec {program}",
             pid_file.display(),
             pid_file.display(),
             pid_file.display()
         ));
         command
+    }
+
+    fn sleeper(pid_file: &Path) -> Command {
+        recording_pid(pid_file, "sleep 30")
+    }
+
+    async fn promptly<T>(work: impl std::future::Future<Output = T>) -> T {
+        tokio::time::timeout(Duration::from_secs(5), work)
+            .await
+            .expect("the call returned promptly")
+    }
+
+    async fn serve_a_megabyte_then_stall() -> String {
+        let mut bytes =
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nConnection: close\r\n\r\n"
+                .to_vec();
+        bytes.extend_from_slice(&[0; 1 << 20]);
+        serve_raw(bytes, true).await
     }
 
     #[tokio::test]
@@ -344,7 +419,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let url = serve_raw(response(FAKE_PDF.len(), FAKE_PDF), false).await;
 
-        let pages = download_pages_in(&reqwest::Client::new(), &url, dir.path())
+        let pages = download_pages_in(&reqwest::Client::new(), &url, dir.path(), MAX_PDF_BYTES)
             .await
             .unwrap();
 
@@ -360,7 +435,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let url = serve_raw(response(1000, b"%PDF-1.4\n"), false).await;
 
-        let error = download_pages_in(&reqwest::Client::new(), &url, dir.path())
+        let error = download_pages_in(&reqwest::Client::new(), &url, dir.path(), MAX_PDF_BYTES)
             .await
             .unwrap_err();
 
@@ -377,9 +452,14 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let url = serve_raw(response(FAKE_PDF.len(), FAKE_PDF), false).await;
 
-        let error = download_pages_in(&reqwest::Client::new(), &url, &dir.path().join("gone"))
-            .await
-            .unwrap_err();
+        let error = download_pages_in(
+            &reqwest::Client::new(),
+            &url,
+            &dir.path().join("gone"),
+            MAX_PDF_BYTES,
+        )
+        .await
+        .unwrap_err();
 
         assert_eq!(
             error.to_string(),
@@ -409,7 +489,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let url = serve_raw(response(9, b"not a pdf"), false).await;
 
-        let error = download_pages_in(&reqwest::Client::new(), &url, dir.path())
+        let error = download_pages_in(&reqwest::Client::new(), &url, dir.path(), MAX_PDF_BYTES)
             .await
             .unwrap_err();
 
@@ -424,7 +504,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let url = serve_raw(response(1000, b"%PDF-1.4\n"), true).await;
         let http = reqwest::Client::new();
-        let mut download = Box::pin(download_pages_in(&http, &url, dir.path()));
+        let mut download = Box::pin(download_pages_in(&http, &url, dir.path(), MAX_PDF_BYTES));
 
         let deadline = tokio::time::sleep(Duration::from_secs(5));
         tokio::pin!(deadline);
@@ -447,9 +527,14 @@ mod tests {
     async fn a_missing_extractor_is_named() {
         let command = Command::new("diario-alerr-missing-pdftotext");
 
-        let error = run(command, Path::new("edition.pdf"), Duration::from_secs(5))
-            .await
-            .unwrap_err();
+        let error = run(
+            command,
+            Path::new("edition.pdf"),
+            Duration::from_secs(5),
+            MAX_TEXT_BYTES,
+        )
+        .await
+        .unwrap_err();
 
         assert!(matches!(error, GazetteError::Pdftotext(_)), "{error}");
         assert!(
@@ -469,6 +554,7 @@ mod tests {
             sleeper(&pid_file),
             Path::new("edition.pdf"),
             Duration::from_secs(2),
+            MAX_TEXT_BYTES,
         )
         .await
         .unwrap_err();
@@ -486,12 +572,90 @@ mod tests {
             sleeper(&pid_file),
             Path::new("edition.pdf"),
             Duration::from_secs(60),
+            MAX_TEXT_BYTES,
         ));
 
         let pid = wait_for(|| pid_from(&pid_file)).await;
         started.abort();
 
         wait_for(|| is_gone_or_zombie(&pid).then_some(())).await;
+    }
+
+    #[tokio::test]
+    async fn pdfs_above_the_limit_are_refused_while_streaming() {
+        let dir = TempDir::new().unwrap();
+        let url = serve_a_megabyte_then_stall().await;
+
+        let error = promptly(download_pages_in(
+            &reqwest::Client::new(),
+            &url,
+            dir.path(),
+            64 << 10,
+        ))
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!("download {url}: larger than 64 KiB")
+        );
+        assert_eq!(leftovers(dir.path()), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn pdfs_announced_above_the_limit_are_refused_before_a_file_exists() {
+        let dir = TempDir::new().unwrap();
+        let url = serve_raw(response(1 << 20, b""), true).await;
+
+        let error = promptly(download_pages_in(
+            &reqwest::Client::new(),
+            &url,
+            &dir.path().join("gone"),
+            64 << 10,
+        ))
+        .await
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!("download {url}: larger than 64 KiB")
+        );
+    }
+
+    #[tokio::test]
+    async fn extractors_printing_too_much_text_are_killed_and_reaped() {
+        let dir = TempDir::new().unwrap();
+        let pid_file = dir.path().join("pid");
+
+        let error = promptly(run(
+            recording_pid(&pid_file, "yes"),
+            Path::new("edition.pdf"),
+            Duration::from_secs(60),
+            64 << 10,
+        ))
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "pdftotext: more than 64 KiB of text");
+        let pid = pid_from(&pid_file).expect("the extractor started");
+        assert!(!Path::new(&format!("/proc/{pid}")).exists());
+    }
+
+    #[test]
+    fn pdf_bounds_read_as_the_production_limits() {
+        let pdf = GazetteError::PdfTooLarge {
+            url: "https://x/1.pdf".to_owned(),
+            limit: MAX_PDF_BYTES,
+        };
+        let text = GazetteError::TooMuchText {
+            limit: MAX_TEXT_BYTES,
+        };
+
+        assert_eq!(
+            pdf.to_string(),
+            "download https://x/1.pdf: larger than 256 MiB"
+        );
+        assert_eq!(text.to_string(), "pdftotext: more than 64 MiB of text");
     }
 
     #[test]
