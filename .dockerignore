@@ -1,8 +1,9 @@
-.env
-*.md
+target
 .git
 .github
 .claude
 .githooks
-tmp
-diario-alerr
+tests
+testdata
+*.md
+.env
