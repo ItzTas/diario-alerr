@@ -17,6 +17,8 @@ pub(crate) use html::html_unescape;
 pub const USER_AGENT: &str = "diario-alerr/2.0";
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 const PER_PAGE: u32 = 100;
+const MAX_PAGES: u32 = 100;
+const MAX_LISTING_BYTES: usize = 4 << 20;
 
 pub struct Client {
     http: reqwest::Client,
@@ -33,10 +35,16 @@ pub enum GazetteError {
     Decode(serde_json::Error),
     #[error("decode media list: {0}")]
     ListingBody(#[source] reqwest::Error),
+    #[error("media list: more than {limit} pages")]
+    TooManyPages { limit: u32 },
+    #[error("media list: response larger than {}", byte_size(*.limit))]
+    ListingTooLarge { limit: usize },
     #[error("edition {edition}: date_gmt {} is not a WordPress timestamp", go_quote(.raw))]
     Date { edition: i64, raw: String },
     #[error("download {url}: {source}")]
     Download { url: String, source: reqwest::Error },
+    #[error("download {url}: larger than {}", byte_size(*.limit))]
+    PdfTooLarge { url: String, limit: usize },
     #[error("create temp file: {0}")]
     CreateTempFile(#[source] std::io::Error),
     #[error("write {file}: {source}")]
@@ -46,6 +54,8 @@ pub enum GazetteError {
     },
     #[error("pdftotext: {0}")]
     Pdftotext(String),
+    #[error("pdftotext: more than {} of text", byte_size(*.limit))]
+    TooMuchText { limit: usize },
 }
 
 #[derive(Default, Deserialize)]
@@ -82,16 +92,30 @@ impl Client {
     }
 
     pub async fn list_editions(&self, after: DateTime<Utc>) -> Result<Vec<Edition>, GazetteError> {
+        self.list_editions_within(after, MAX_PAGES, MAX_LISTING_BYTES)
+            .await
+    }
+
+    async fn list_editions_within(
+        &self,
+        after: DateTime<Utc>,
+        max_pages: u32,
+        max_bytes: usize,
+    ) -> Result<Vec<Edition>, GazetteError> {
         let mut editions = Vec::new();
-        for page in 1..=u32::MAX {
+        for page in 1..=max_pages {
             let url = format!("{}?{}", self.api_url, listing_query(after, page));
-            let (batch, total_pages) = self.fetch_page(&url).await?;
+            let (batch, total_pages) = self.fetch_page(&url, max_bytes).await?;
+            let last = batch.is_empty() || i64::from(page) >= total_pages;
             editions.extend(batch);
-            if i64::from(page) >= total_pages {
+            if last {
+                return Ok(editions);
+            }
+            if total_pages > i64::from(max_pages) {
                 break;
             }
         }
-        Ok(editions)
+        Err(GazetteError::TooManyPages { limit: max_pages })
     }
 
     pub async fn scan(
@@ -104,10 +128,14 @@ impl Client {
         Ok(find_terms(&normalized, terms))
     }
 
-    async fn fetch_page(&self, url: &str) -> Result<(Vec<Edition>, i64), GazetteError> {
+    async fn fetch_page(
+        &self,
+        url: &str,
+        max_bytes: usize,
+    ) -> Result<(Vec<Edition>, i64), GazetteError> {
         let response = get(&self.http, url).await?;
         let total_pages = total_pages(&response);
-        let body = response.bytes().await.map_err(GazetteError::ListingBody)?;
+        let body = read_listing(response, max_bytes).await?;
         let editions = decode_media(&body)
             .map_err(GazetteError::Decode)?
             .into_iter()
@@ -127,6 +155,34 @@ pub(crate) async fn get(http: &reqwest::Client, url: &str) -> Result<Response, G
         });
     }
     Ok(response)
+}
+
+async fn read_listing(mut response: Response, limit: usize) -> Result<Vec<u8>, GazetteError> {
+    let too_large = GazetteError::ListingTooLarge { limit };
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(too_large);
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(GazetteError::ListingBody)? {
+        if body.len() + chunk.len() > limit {
+            return Err(too_large);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+fn byte_size(bytes: usize) -> String {
+    let units = [(1 << 20, "MiB"), (1 << 10, "KiB")];
+    for (unit, name) in units {
+        if bytes >= unit && bytes.is_multiple_of(unit) {
+            return format!("{} {name}", bytes / unit);
+        }
+    }
+    format!("{bytes} bytes")
 }
 
 fn total_pages(response: &Response) -> i64 {
@@ -208,10 +264,26 @@ fn query_escape(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{DateTime, Utc};
-    use serde::Deserialize;
+    use std::convert::Infallible;
+    use std::future::Future;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
-    use super::{GazetteError, decode_media, listing_query};
+    use axum::Router;
+    use axum::body::{Body, Bytes};
+    use axum::http::Uri;
+    use axum::response::{IntoResponse, Response};
+    use axum::routing::get;
+    use chrono::{DateTime, Utc};
+    use futures_util::stream::{self, StreamExt};
+    use serde::Deserialize;
+    use tokio::net::TcpListener;
+
+    use super::{
+        Client, GazetteError, HTTP_TIMEOUT, MAX_LISTING_BYTES, MAX_PAGES, decode_media,
+        listing_query,
+    };
     use crate::golden::golden;
 
     #[derive(Deserialize)]
@@ -268,5 +340,134 @@ mod tests {
             error.to_string(),
             r#"edition 0: date_gmt "" is not a WordPress timestamp"#
         );
+    }
+
+    const EDITION: &str = r#"[{"id": 1, "date_gmt": "2026-11-01T10:00:00"}]"#;
+
+    async fn promptly<T>(work: impl Future<Output = T>) -> T {
+        tokio::time::timeout(Duration::from_secs(5), work)
+            .await
+            .expect("the call returned promptly")
+    }
+
+    fn page_of(uri: &Uri) -> u32 {
+        uri.query()
+            .unwrap_or_default()
+            .split('&')
+            .find_map(|pair| pair.strip_prefix("page="))
+            .and_then(|page| page.parse().ok())
+            .expect("a page parameter")
+    }
+
+    async fn listing(respond: fn(u32) -> Response) -> (Client, Arc<AtomicUsize>) {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&requests);
+        let router = Router::new().route(
+            "/",
+            get(move |uri: Uri| {
+                let counted = Arc::clone(&counted);
+                async move {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    respond(page_of(&uri))
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        (Client::new(url, HTTP_TIMEOUT).unwrap(), requests)
+    }
+
+    fn page(total: String, body: &'static str) -> Response {
+        ([("X-WP-TotalPages", total)], body).into_response()
+    }
+
+    fn after() -> DateTime<Utc> {
+        utc("2026-10-31T00:00:00Z")
+    }
+
+    #[tokio::test]
+    async fn listings_announcing_too_many_pages_stop_with_an_error() {
+        let (announced, announced_requests) = listing(|_| page("1000".to_owned(), EDITION)).await;
+        let (growing, growing_requests) =
+            listing(|number| page((number + 1).to_string(), EDITION)).await;
+
+        let announced_error =
+            promptly(announced.list_editions_within(after(), 3, MAX_LISTING_BYTES))
+                .await
+                .unwrap_err();
+        let growing_error = promptly(growing.list_editions_within(after(), 3, MAX_LISTING_BYTES))
+            .await
+            .unwrap_err();
+
+        assert_eq!(announced_error.to_string(), "media list: more than 3 pages");
+        assert_eq!(announced_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(growing_error.to_string(), "media list: more than 3 pages");
+        assert_eq!(growing_requests.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn an_empty_page_ends_the_listing() {
+        let (client, requests) = listing(|number| {
+            let body = if number == 1 { EDITION } else { "[]" };
+            page("50".to_owned(), body)
+        })
+        .await;
+
+        let editions = promptly(client.list_editions_within(after(), MAX_PAGES, MAX_LISTING_BYTES))
+            .await
+            .unwrap();
+
+        assert_eq!(editions.len(), 1);
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn listing_bodies_above_the_limit_are_refused_while_streaming() {
+        let (client, _) = listing(|_| {
+            let blank = Bytes::from_static(&[b' '; 4096]);
+            let body = stream::iter([Ok::<_, Infallible>(Bytes::from_static(b"["))])
+                .chain(stream::repeat(Ok(blank)).take(256))
+                .chain(stream::pending());
+            ([("X-WP-TotalPages", "1")], Body::from_stream(body)).into_response()
+        })
+        .await;
+
+        let error = promptly(client.list_editions_within(after(), MAX_PAGES, 64 << 10))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "media list: response larger than 64 KiB");
+    }
+
+    #[tokio::test]
+    async fn listing_bodies_announced_above_the_limit_are_refused_before_reading() {
+        let (client, _) = listing(|_| {
+            let body = Body::from_stream(stream::pending::<Result<Bytes, Infallible>>());
+            (
+                [("X-WP-TotalPages", "1"), ("Content-Length", "1048576")],
+                body,
+            )
+                .into_response()
+        })
+        .await;
+
+        let error = promptly(client.list_editions_within(after(), MAX_PAGES, 64 << 10))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.to_string(), "media list: response larger than 64 KiB");
+    }
+
+    #[test]
+    fn listing_bounds_read_as_the_production_limits() {
+        let pages = GazetteError::TooManyPages { limit: MAX_PAGES };
+        let bytes = GazetteError::ListingTooLarge {
+            limit: MAX_LISTING_BYTES,
+        };
+
+        assert_eq!(pages.to_string(), "media list: more than 100 pages");
+        assert_eq!(bytes.to_string(), "media list: response larger than 4 MiB");
+        assert_eq!(super::byte_size(1500), "1500 bytes");
     }
 }
