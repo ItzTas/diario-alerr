@@ -360,6 +360,36 @@ async fn ack_never_moves_backwards() {
 }
 
 #[tokio::test]
+async fn last_issued_seq_follows_the_alert_sequence() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let store = Store::new(&db.url).expect("store");
+    assert_eq!(store.last_issued_seq().await.expect("unused sequence"), 0);
+
+    store
+        .initialize(start(), &welcome())
+        .await
+        .expect("initialize");
+    store
+        .record_edition(&edition(1, start(), Some(alert("a", start()))))
+        .await
+        .expect("record");
+    let issued = all_alerts(&store).await;
+    assert_eq!(seqs(&issued).len(), 2);
+    let newest = issued[1].seq;
+    assert_eq!(
+        store.last_issued_seq().await.expect("after inserts"),
+        newest
+    );
+
+    store.ack_alerts(newest).await.expect("ack");
+    store.prune(1000, 0).await.expect("prune");
+    assert!(all_alerts(&store).await.is_empty());
+    assert_eq!(store.last_issued_seq().await.expect("after prune"), newest);
+}
+
+#[tokio::test]
 async fn mark_success_records_the_last_success() {
     let Some(db) = migrated_database().await else {
         return;
@@ -401,6 +431,7 @@ async fn writer_lock_notices_its_connection_ending() {
         return;
     };
     let mut lock = acquire_writer_lock(&db.url).await.expect("lock");
+    assert_eq!(lock.close_reason(), None);
     let admin = connect(&db.url).await;
     admin
         .execute(
@@ -413,6 +444,14 @@ async fn writer_lock_notices_its_connection_ending() {
     tokio::time::timeout(Duration::from_secs(5), lock.closed())
         .await
         .expect("closed resolves once the connection ends");
+    let reason = lock
+        .close_reason()
+        .expect("a terminated connection has a reason");
+    assert!(
+        reason.contains("terminating connection due to administrator command"),
+        "{reason}"
+    );
+    assert!(!reason.contains(&db.url), "{reason}");
 }
 
 #[tokio::test]
