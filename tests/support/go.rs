@@ -3,9 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Output, Stdio};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 const TAG: &str = "v1.0.0";
 const BINARY: &str = "diario-alerr-go";
+const STALE_STAGING: Duration = Duration::from_secs(5 * 60);
 
 pub fn go_v1_binary() -> Option<PathBuf> {
     static BUILT: OnceLock<Option<PathBuf>> = OnceLock::new();
@@ -47,6 +49,7 @@ fn build() -> PathBuf {
     extract(source.path());
     let cache = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("go-{TAG}"));
     fs::create_dir_all(&cache).expect("create the Go release's build directory");
+    remove_stale_staging(&cache);
     let staging = cache.join(format!(".{BINARY}-{}", process::id()));
     let mut go = Command::new("go");
     go.args(["build", "-o"])
@@ -57,6 +60,23 @@ fn build() -> PathBuf {
     let binary = cache.join(BINARY);
     fs::rename(&staging, &binary).expect("move the Go release into place");
     binary
+}
+
+fn remove_stale_staging(cache: &Path) {
+    let Ok(entries) = fs::read_dir(cache) else {
+        return;
+    };
+    let prefix = format!(".{BINARY}-");
+    for entry in entries.flatten() {
+        let stale = entry.file_name().to_string_lossy().starts_with(&prefix)
+            && entry
+                .metadata()
+                .and_then(|found| found.modified())
+                .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age > STALE_STAGING));
+        if stale {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
 }
 
 fn extract(into: &Path) {
