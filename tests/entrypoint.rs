@@ -1,5 +1,6 @@
 mod support;
 
+use std::fs;
 use std::time::{Duration, Instant};
 
 use diario_alerr::domain::Alert;
@@ -212,6 +213,38 @@ async fn sigterm_during_a_cycle_exits_within_two_seconds() {
     assert!(!plugin.socket.exists(), "{}", plugin.socket.display());
     assert_eq!(exited.stdout.lines().count(), 1, "{}", exited.stdout);
     assert!(error_lines(&exited.stderr).is_empty(), "{}", exited.stderr);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn start_up_removes_its_own_leftover_pdfs() {
+    if !require_pdftotext() {
+        return;
+    }
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let temp = socket_dir();
+    let elsewhere = tempfile::tempdir().expect("a directory for the link target");
+    let leftover = temp.path().join("edition-Ab3xY9.pdf");
+    let unrelated = temp.path().join("report.pdf");
+    let link = temp.path().join("edition-Zz9Qq1.pdf");
+    let target = elsewhere.path().join("edition-Kk2Pp8.pdf");
+    for file in [&leftover, &unrelated, &target] {
+        fs::write(file, b"%PDF-1.4\n").expect("write a file");
+    }
+    std::os::unix::fs::symlink(&target, &link).expect("link");
+
+    let _plugin = spawn_plugin(&[
+        ("DATABASE_URL", &db.url),
+        ("WATCH_TERMS", "TALES SABINI"),
+        ("GAZETTE_API_URL", UNREACHABLE_GAZETTE),
+        ("TMPDIR", path_text(&temp)),
+    ]);
+
+    assert!(!leftover.exists(), "{}", leftover.display());
+    assert!(unrelated.is_file(), "{}", unrelated.display());
+    assert!(link.is_symlink(), "{}", link.display());
+    assert!(target.is_file(), "{}", target.display());
 }
 
 #[tokio::test(flavor = "multi_thread")]

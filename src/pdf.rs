@@ -1,3 +1,6 @@
+use std::error::Error;
+use std::ffi::OsStr;
+use std::fs::{self, DirEntry};
 use std::io;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
@@ -8,6 +11,7 @@ use reqwest::Response;
 use tempfile::NamedTempFile;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
+use tracing::warn;
 
 use crate::gazette::{GazetteError, get};
 
@@ -17,6 +21,60 @@ const MAX_TEXT_BYTES: usize = 64 << 20;
 const STDERR_LIMIT: usize = 32 << 10;
 const EXCERPT_CHARS: usize = 200;
 const VERSION_CHECK_LIMIT: Duration = Duration::from_secs(5);
+const FILE_PREFIX: &str = "edition-";
+const FILE_SUFFIX: &str = ".pdf";
+const RANDOM_CHARS: usize = 6;
+
+pub(crate) fn remove_leftovers() {
+    remove_leftovers_in(&std::env::temp_dir());
+}
+
+fn remove_leftovers_in(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir).inspect_err(warn_unlisted) else {
+        return;
+    };
+    for entry in entries {
+        let Ok(entry) = entry.inspect_err(warn_unlisted) else {
+            continue;
+        };
+        remove_if_leftover(&entry);
+    }
+}
+
+fn remove_if_leftover(entry: &DirEntry) {
+    if !is_leftover_name(&entry.file_name()) {
+        return;
+    }
+    let Ok(kind) = entry.file_type().inspect_err(warn_unlisted) else {
+        return;
+    };
+    if !kind.is_file() {
+        return;
+    }
+    if let Err(failure) = fs::remove_file(entry.path()) {
+        warn!(
+            error = &failure as &dyn Error,
+            "could not remove a leftover PDF"
+        );
+    }
+}
+
+fn warn_unlisted(failure: &io::Error) {
+    warn!(
+        error = failure as &dyn Error,
+        "could not list leftover PDFs"
+    );
+}
+
+fn is_leftover_name(name: &OsStr) -> bool {
+    let random = name
+        .to_str()
+        .and_then(|name| name.strip_prefix(FILE_PREFIX))
+        .and_then(|rest| rest.strip_suffix(FILE_SUFFIX));
+    random.is_some_and(|random| {
+        random.len() == RANDOM_CHARS && random.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    })
+}
 
 pub(crate) async fn check_pdftotext() -> io::Result<()> {
     let mut command = Command::new("pdftotext");
@@ -69,8 +127,9 @@ async fn download_pages_in(
         });
     }
     let file = tempfile::Builder::new()
-        .prefix("edition-")
-        .suffix(".pdf")
+        .prefix(FILE_PREFIX)
+        .suffix(FILE_SUFFIX)
+        .rand_bytes(RANDOM_CHARS)
         .tempfile_in(dir)
         .map_err(|error| GazetteError::CreateTempFile(without_path(error)))?;
     save(response, url, &file, max_bytes).await?;
@@ -314,8 +373,12 @@ pub(crate) mod tests {
     use tokio::net::{TcpListener, TcpStream};
     use tokio::process::Command;
 
-    use super::{MAX_PDF_BYTES, MAX_TEXT_BYTES, answers, download_pages_in, failure, run};
+    use super::{
+        MAX_PDF_BYTES, MAX_TEXT_BYTES, answers, download_pages_in, failure, is_leftover_name,
+        remove_leftovers_in, run,
+    };
     use crate::gazette::GazetteError;
+    use crate::logtest::{captured, logged};
 
     const FAKE_PDF: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -527,6 +590,21 @@ pub(crate) mod tests {
         assert_eq!(leftovers(dir.path()), Vec::<String>::new());
     }
 
+    async fn until_a_file_appears(
+        dir: &Path,
+        download: &mut (impl Future<Output = Result<Vec<String>, GazetteError>> + Unpin),
+    ) {
+        let deadline = tokio::time::sleep(Duration::from_secs(5));
+        tokio::pin!(deadline);
+        while leftovers(dir).is_empty() {
+            tokio::select! {
+                result = &mut *download => panic!("the download ended: {result:?}"),
+                () = &mut deadline => panic!("the temporary file never appeared"),
+                () = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+        }
+    }
+
     #[tokio::test]
     async fn dropped_downloads_leave_no_file() {
         let dir = TempDir::new().unwrap();
@@ -534,21 +612,59 @@ pub(crate) mod tests {
         let http = reqwest::Client::new();
         let mut download = Box::pin(download_pages_in(&http, &url, dir.path(), MAX_PDF_BYTES));
 
-        let deadline = tokio::time::sleep(Duration::from_secs(5));
-        tokio::pin!(deadline);
-        loop {
-            tokio::select! {
-                result = &mut download => panic!("the download ended: {result:?}"),
-                () = &mut deadline => panic!("the temporary file never appeared"),
-                () = tokio::time::sleep(Duration::from_millis(10)) => {}
-            }
-            if !leftovers(dir.path()).is_empty() {
-                break;
-            }
-        }
+        until_a_file_appears(dir.path(), &mut download).await;
         drop(download);
 
         assert_eq!(leftovers(dir.path()), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn the_sweep_removes_the_files_downloads_create() {
+        let dir = TempDir::new().unwrap();
+        let url = serve_raw(response(1000, b"%PDF-1.4\n"), true).await;
+        let http = reqwest::Client::new();
+        let mut download = Box::pin(download_pages_in(&http, &url, dir.path(), MAX_PDF_BYTES));
+        until_a_file_appears(dir.path(), &mut download).await;
+
+        remove_leftovers_in(dir.path());
+
+        assert_eq!(leftovers(dir.path()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn leftovers_are_named_like_the_downloads() {
+        let names = [
+            ("edition-Ab3xY9.pdf", true),
+            ("edition-000000.pdf", true),
+            ("edition-Ab3xY.pdf", false),
+            ("edition-Ab3xY9z.pdf", false),
+            ("edition-Ab3-Y9.pdf", false),
+            ("edition-Ab3xY9.pdf.part", false),
+            ("Edition-Ab3xY9.pdf", false),
+            ("report.pdf", false),
+        ];
+        for (name, leftover) in names {
+            assert_eq!(is_leftover_name(name.as_ref()), leftover, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_unreadable_temp_dir_is_logged_and_left_alone() {
+        let dir = TempDir::new().unwrap();
+
+        let events = captured(|| remove_leftovers_in(&dir.path().join("gone")));
+
+        assert_eq!(
+            events,
+            [logged(&[
+                (
+                    "error",
+                    "error field: No such file or directory (os error 2)"
+                ),
+                ("level", "WARN"),
+                ("message", "could not list leftover PDFs"),
+            ])]
+        );
     }
 
     #[tokio::test]
