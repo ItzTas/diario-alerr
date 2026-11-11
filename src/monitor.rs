@@ -17,6 +17,8 @@ const CURSOR_OVERLAP: TimeDelta = TimeDelta::hours(24);
 const SCAN_WORKERS: usize = 2;
 const MAX_SEEN: i64 = 1000;
 const MAX_ALERTS: i64 = 100;
+const MAX_SHOWN_CHARS: usize = 300;
+const CUT_MARK: char = '…';
 
 pub(crate) const DATABASE_UNAVAILABLE: &str = "the database is unavailable";
 
@@ -188,10 +190,14 @@ impl<G: Gazette> Monitor<G> {
 
 fn alert_for(edition: &Edition, hits: Option<Hits>) -> Option<Alert> {
     let Some(hits) = hits else {
-        info!(edition = %edition.title, "no match");
+        info!(edition = %capped(&edition.title), "no match");
         return None;
     };
-    info!(edition = %edition.title, pages = ?pages_in_term_order(&hits), "MATCH");
+    info!(
+        edition = %capped(&edition.title),
+        pages = ?pages_in_term_order(&hits),
+        "MATCH"
+    );
     Some(edition_alert(edition, &hits))
 }
 
@@ -211,7 +217,11 @@ fn listing_failed(failure: &(dyn Error + 'static)) -> String {
 }
 
 fn read_failed(edition: &Edition, failure: &GazetteError) -> String {
-    warn!(edition = %edition.title, error = failure as &dyn Error, "could not read edition");
+    warn!(
+        edition = %capped(&edition.title),
+        error = failure as &dyn Error,
+        "could not read edition"
+    );
     one_line(&format!(
         "could not read edition {}: {}",
         edition.title,
@@ -220,7 +230,11 @@ fn read_failed(edition: &Edition, failure: &GazetteError) -> String {
 }
 
 fn record_failed(edition: &Edition, failure: &StoreError) -> String {
-    error!(edition = %edition.title, error = failure as &dyn Error, "could not record edition");
+    error!(
+        edition = %capped(&edition.title),
+        error = failure as &dyn Error,
+        "could not record edition"
+    );
     one_line(&format!(
         "could not record edition {}: {}",
         edition.title,
@@ -236,10 +250,19 @@ fn shown(failure: &(dyn Error + 'static)) -> String {
 }
 
 fn one_line(text: &str) -> String {
-    text.split(['\r', '\n'])
+    let joined = text
+        .split(['\r', '\n'])
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" ");
+    capped(&joined)
+}
+
+fn capped(text: &str) -> String {
+    let Some((cut, _)) = text.char_indices().nth(MAX_SHOWN_CHARS) else {
+        return text.to_owned();
+    };
+    format!("{}{CUT_MARK}", &text[..cut])
 }
 
 #[cfg(test)]
@@ -387,6 +410,57 @@ mod tests {
                     ("level", "INFO"),
                     ("message", "MATCH"),
                     ("pages", r#"[("B", [2]), ("A", [1, 3])]"#),
+                ]),
+            ]
+        );
+    }
+
+    #[test]
+    fn long_titles_are_cut_in_problems_and_logs() {
+        let edition = Edition {
+            id: 1,
+            published: utc("2026-11-06T20:00:00Z"),
+            url: "https://x/1.pdf".to_owned(),
+            title: "é".repeat(100_000),
+        };
+        let failure = GazetteError::Pdftotext("bad font".to_owned());
+        let shown_title = format!("{}…", "é".repeat(300));
+        let prefix = "could not read edition ";
+        let problem = format!("{prefix}{}…", "é".repeat(300 - prefix.len()));
+
+        let mut problems = Vec::new();
+        let events = captured(|| {
+            problems.push(read_failed(&edition, &failure));
+            problems.push(record_failed(&edition, &StoreError::Timeout("waiting")));
+            alert_for(&edition, None);
+        });
+
+        assert_eq!(
+            problems,
+            [
+                problem,
+                format!("could not record edition {}…", "é".repeat(275)),
+            ]
+        );
+        assert_eq!(
+            events,
+            [
+                logged(&[
+                    ("edition", &shown_title),
+                    ("error", "error field: pdftotext: bad font"),
+                    ("level", "WARN"),
+                    ("message", "could not read edition"),
+                ]),
+                logged(&[
+                    ("edition", &shown_title),
+                    ("error", "error field: waiting timed out"),
+                    ("level", "ERROR"),
+                    ("message", "could not record edition"),
+                ]),
+                logged(&[
+                    ("edition", &shown_title),
+                    ("level", "INFO"),
+                    ("message", "no match"),
                 ]),
             ]
         );
