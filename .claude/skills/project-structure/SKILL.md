@@ -25,7 +25,7 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 ├── src/
 │   ├── main.rs                # "plugin" argument + hub cookie, logging, runtime, exit code
 │   ├── lib.rs                 # module declarations only
-│   ├── app.rs                 # start-up order: config, writer lock, migrations, prepare, scheduler, serve
+│   ├── app.rs                 # start-up: config, pdftotext check, lock, PDF sweep, migrations, first-read seq, prepare, serve
 │   ├── config.rs              # Config from the environment, defaults and the Go release's messages
 │   ├── timestamp.rs           # Clock; parsing and formatting times with the Go release's rules
 │   ├── domain.rs              # Edition, Alert, gazette constants
@@ -33,7 +33,7 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 │   ├── alerts.rs              # welcome_alert, edition_alert
 │   ├── gazette.rs             # media API client, listing query, GazetteError
 │   ├── gazette/html.rs        # HTML entity decoding as Go's html.UnescapeString does it
-│   ├── pdf.rs                 # download to a temporary file, pdftotext
+│   ├── pdf.rs                 # download to a temporary file, pdftotext, its start-up check, leftover sweep
 │   ├── store.rs               # all SQL, Store (deadpool), MIGRATIONS, WriterLock
 │   ├── monitor.rs             # trait Gazette, Monitor: prepare, run_cycle
 │   ├── scheduler.rs           # periodic loop, trigger, CycleState
@@ -97,8 +97,9 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
   `mod.rs` carries `#![allow(dead_code)]` because no single test file uses all of it. One file per
   subject: `gazette_site.rs` (fake WordPress site), `pdf.rs` (a hand-written PDF),
   `fake_gazette.rs` (a `Gazette` for cycle tests), `process.rs` (starts the binary, reads the
-  handshake, sends signals), `channels.rs` (fake ntfy and Telegram, used only by the Go release)
-  and `go.rs` (builds the Go release from the tag `v1.0.0`).
+  handshake, sends signals), `grpc.rs` (calls `Events` on the running binary over its socket),
+  `channels.rs` (fake ntfy and Telegram, used only by the Go release) and `go.rs` (builds the Go
+  release from the tag `v1.0.0`).
 - Database tests get a database from `support::migrated_database()`, or from the test kit's
   `database()` when the test migrates by itself.
 - A test that needs something outside the crate (Postgres, `pdftotext`, `sh`, `go`, `git`, the tag

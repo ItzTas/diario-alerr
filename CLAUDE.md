@@ -60,7 +60,8 @@ skipping.
   `TEST_DATABASE_URL` when set (the compose Postgres works, see `.env.example`), and otherwise
   starts a throwaway cluster with `initdb` and `postgres` from `PATH`.
   `tests/support::migrated_database` adds the migrations.
-- `pdftotext` (poppler) for the PDF scans.
+- `pdftotext` (poppler) for the PDF scans, and for every test that starts the binary, because
+  start-up checks for it.
 - `sh` with `kill` for the tests that start the binary and signal it.
 - `go`, `git` and the tag `v1.0.0` for `tests/go_compat.rs`. It extracts the Go release with
   `git archive v1.0.0`, builds it, and caches the binary under `target/tmp/go-v1.0.0/`. A shallow
@@ -80,21 +81,24 @@ reason to edit a vector.
 
 CI (`.github/workflows/docker.yml`) runs `cargo fmt --check`, clippy and `cargo test --locked`
 against a `postgres:18-alpine` service, with Go 1.27.2 and poppler installed. Then it builds the
-image for amd64 and arm64 and publishes it to `ghcr.io` on pushes to `main` and on `v*` tags.
+image for amd64 and arm64 and publishes it to `ghcr.io` on every run that is not a pull request:
+pushes to `main`, `v*` tags and manual runs. A `v*` tag gets the version tags (`2.0.0` and `2.0`),
+only the default branch moves `latest`, and every image gets a `sha-` tag.
 
 ## Configuration
 
 Under monitor-hub, set these on the hub with the `DIARIO__` prefix (`DIARIO__WATCH_TERMS` and so
 on). The hub removes the prefix before it starts the plugin. The plugin reads only its
-environment, never a `.env` file. `.env.example` lists every variable.
+environment, never a `.env` file. `.env.example` lists every variable except `GAZETTE_API_URL`,
+which only the tests set.
 
 - `DATABASE_URL` (required): Postgres address. The plugin connects without TLS.
 - `WATCH_TERMS` (required): comma-separated names or registration numbers. Matching ignores case,
   accents and repeated whitespace.
 - `CHECK_INTERVAL_MINUTES` (default 30): a positive decimal number of minutes.
-- `START_AFTER`: a date (`2006-01-02`) or an RFC 3339 timestamp of the first edition to consider.
-  Only used the first time, when the database has no state yet. Default: 72 hours before the
-  start.
+- `START_AFTER`: when the first edition to consider was published. A date (`2006-01-02`), an
+  RFC 3339 timestamp, or a timestamp without a zone (`2006-01-02T15:04:05`, read as UTC). Only
+  used the first time, when the database has no state yet. Default: 72 hours before the start.
 - `GAZETTE_API_URL` overrides the gazette's media API address. Only the tests use it.
 
 The hub also passes `PATH`, `TZ`, `TMPDIR` and `MONITOR_HUB_DATA_DIR`. The plugin ignores `TZ`
@@ -105,32 +109,57 @@ and keeps all its state in Postgres. Each PDF is downloaded to a temporary file 
 - The hub starts `diario-alerr plugin` with its cookie variable. Started any other way, the binary
   prints the SDK's `NOT_LAUNCHED_BY_HUB` text on stderr and exits 1.
 - Stdout carries only the handshake line. Logs go to stderr as JSON lines.
-- Start-up reads the configuration, takes the database writer lock, applies the migrations, opens
-  the pool and prepares the monitor state, all before the handshake. Each connection attempt has
-  10 s, and the whole sequence has 45 s, because the hub kills a plugin that has not answered in
-  60 s.
-- Exit code 0 means a clean stop (SIGTERM or SIGINT). Exit code 1 means a start-up failure or a
-  lost database lock. Either way the plugin writes exactly one JSON `fatal` line at `error` level.
-  Its `error` field holds the configuration error, names the start-up step that failed (for
-  example `acquiring the database writer lock: ...`), or starts with `the database lock was lost`.
-  The hub restarts the plugin with a backoff.
+- Start-up reads the configuration, checks that `pdftotext -v` runs, takes the database writer
+  lock, removes leftover PDFs, applies the migrations, opens the pool, reads the newest alert `seq`
+  and prepares the monitor state, all before the handshake. Each connection attempt has 10 s,
+  `pdftotext -v` has 5 s, and the whole sequence has 45 s, because the hub kills a plugin that has
+  not answered in 60 s.
+- The `pdftotext` check exists because nothing else runs it until a new edition arrives. A hub
+  image without poppler, or with a broken one, shows up as a plugin that does not start instead of
+  one that fails on the next edition.
+- Leftover PDFs are files in `TMPDIR` named like the plugin's own downloads (`edition-`, six
+  letters or digits, `.pdf`). A process killed during a scan leaves one behind. Only one process
+  holds the lock, so after taking it the plugin deletes them. It deletes regular files only and
+  never follows a symbolic link. A failure is logged at `warn` and start-up goes on.
+- Exit code 0 means a clean stop (SIGTERM or SIGINT), with no `fatal` line. When the plugin exits
+  1 because of a configuration error, a failed start-up step or a lost database lock, it writes
+  exactly one JSON `fatal` line at `error` level. Its `error` field holds the configuration error,
+  names the start-up step that failed (for example `checking pdftotext: ...` or `acquiring the
+  database writer lock: ...`), or starts with `the database lock was lost`. A run outside the hub
+  and a failure to start logging or the async runtime also exit 1, without a `fatal` line. The hub
+  restarts the plugin with a backoff.
 - A second process on the same database fails at start-up with `another diario-alerr process holds
   the database lock` and migrates nothing.
 - `Describe` names the plugin `diario` with two event kinds: `welcome` (info) and `term_found`
-  (urgent). `Status` answers `CHECKING` during a cycle, `FAILING` with a one-line message when the
-  last cycle did not finish or the database does not answer, and `IDLE` otherwise. `Check` starts
-  a cycle now, or refuses with `a check is already running`.
+  (urgent). `Status` answers `FAILING` with the hub-ahead text below while the last `Events` call
+  found the hub ahead of the database. Otherwise it answers `CHECKING` during a cycle, `FAILING`
+  with a one-line message when the last cycle did not finish or the database does not answer, and
+  `IDLE` otherwise. That message is cut at 300 characters, and so is the `edition` log field,
+  because both can carry text from the gazette site such as an edition title. `Check` starts a cycle now, or
+  refuses with `a check is already running`.
 - `Events(after, limit)` returns the alerts with a `seq` above `after`, in order, exactly
-  `min(limit, available)` of them. A `limit` of 0 means 100, and the maximum is 500. Each call
-  acknowledges every alert up to `after`.
+  `min(limit, available)` of them, except during the first read (next item). A `limit` of 0 means
+  100, and the maximum is 500. Each call acknowledges every alert up to `after`, and writes the
+  state row only when that position moves forward.
+- The first read stops at the newest `seq` that existed at start-up. Until one `Events` call
+  returns a page shorter than its limit, which is how the hub sees the end of a read, `Events`
+  leaves out every newer alert. After that call nothing is left out. This is for the hub's
+  baseline: the hub stores the first read of a plugin it does not know and never announces it,
+  and that read comes about 15 s after the start, while the first cycle records its alerts in a
+  few seconds. Without the limit, whatever the first cycle finds would be absorbed as history; on
+  a take-over from the Go release, that means every edition Go had not recorded yet. With it, those
+  alerts go out on the next poll as normal events. A hub that already knows the plugin gets them
+  one poll (15 s) later. On a new database the welcome alert is newer than that `seq`, so the hub
+  announces it.
 - When the database is down, `Events` answers `UNAVAILABLE` and `Status` answers `FAILING`, both
   with `the database is unavailable`, without the address or the password.
 
 When `the hub is ahead of this database: reset the hub's position for this plugin` appears at
 `error` level, the hub asked for alerts after a `seq` this database never issued. That happens when
 the plugin's database was reset or replaced and the hub's stored position for `diario` was not.
-Until the two agree, `Events` returns no events and acknowledges nothing. Reset both together.
-The plugin logs that line once per process.
+Until the two agree, `Events` returns no events and acknowledges nothing, and `Status` answers
+`FAILING` with that text. The first `Events` call that finds the two in line clears it. Reset both
+together. The plugin logs that line once per process.
 
 ## Flow of a cycle
 
@@ -151,7 +180,9 @@ early.
 
 The gazette client stops at four limits that the Go release did not have: 100 listing pages,
 4 MiB per listing page, 256 MiB per PDF, and 64 MiB of text from `pdftotext`. Each has its own
-error, which ends the cycle as incomplete. Every HTTP request has a total timeout of 60 s.
+error, which ends the cycle as incomplete. Every HTTP request has a total timeout of 60 s. It also
+refuses an edition whose `date_gmt` is before year 1. The Go release accepted year 0, but the hub
+cannot store such an event and would reject every page from then on.
 
 ## Persistence
 
@@ -169,5 +200,7 @@ error, which ends the cycle as incomplete. Every HTTP request has a total timeou
 ## Rollback to the Go release
 
 Stop the plugin, run `sql/rollback/mark-alerts-delivered.sql` against its database, then start
-`ghcr.io/itztas/diario-alerr:1.0.0` on that database. The script marks every alert as delivered
-on Telegram and ntfy, so the Go release does not send again what the hub already sent.
+`ghcr.io/itztas/diario-alerr:1.0.0` on that database. The script marks every stored alert as
+delivered on Telegram and ntfy, so the Go release does not send again what the hub already sent.
+That includes alerts the hub stored but had not delivered yet. After the rollback nobody sends
+those, so look for pending deliveries on the hub before running it.
