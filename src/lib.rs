@@ -5,6 +5,8 @@ pub mod domain;
 pub mod gazette;
 #[cfg(test)]
 mod golden;
+#[cfg(test)]
+mod logtest;
 pub mod monitor;
 mod pdf;
 pub mod scheduler;
