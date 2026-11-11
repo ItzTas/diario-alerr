@@ -10,9 +10,10 @@ use diario_alerr::gazette::GazetteError;
 use diario_alerr::monitor::{CycleOutcome, Gazette, Monitor, MonitorOptions};
 use diario_alerr::store::{SequencedAlert, Store};
 use diario_alerr::text::Hits;
+use tokio::time::Instant;
 
 use support::fake_gazette::FakeGazette;
-use support::{fixed_clock, migrated_database, utc};
+use support::{eventually, fixed_clock, migrated_database, utc};
 
 fn now() -> DateTime<Utc> {
     utc("2026-11-09T12:00:00Z")
@@ -174,6 +175,34 @@ async fn a_failed_scan_stops_recording_but_every_edition_is_scanned() {
     );
     assert_eq!(fake.scans(), 5);
     assert!(seen(&monitor, &[1, 2, 3, 4, 5]).await.is_empty());
+    assert_eq!(fake.max_concurrent_scans(), 2);
+}
+
+#[tokio::test]
+async fn a_slow_edition_does_not_hold_back_the_next_scans() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let published = utc("2026-11-06T20:00:00Z");
+    let editions = (1..=3)
+        .map(|id| edition(id, published + TimeDelta::hours(id)))
+        .collect();
+    let fake = FakeGazette::new(editions);
+    fake.hold_scan(1);
+    let monitor = prepared(&db.url, fake.clone()).await;
+    let third_scan_starts_while_the_first_is_held = async {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        eventually(deadline, "the third scan starts", || fake.scans() == 3).await;
+        fake.release_scans();
+    };
+
+    let (outcome, ()) = tokio::join!(
+        monitor.run_cycle(),
+        third_scan_starts_while_the_first_is_held
+    );
+
+    assert_eq!(outcome, CycleOutcome::Complete);
+    assert_eq!(seen(&monitor, &[1, 2, 3]).await, [1, 2, 3]);
     assert_eq!(fake.max_concurrent_scans(), 2);
 }
 
