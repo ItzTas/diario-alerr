@@ -415,21 +415,32 @@ async fn alerts_after_returns_increasing_seqs_up_to_the_limit() {
 }
 
 #[tokio::test]
-async fn ack_never_moves_backwards() {
+async fn ack_writes_the_state_row_only_when_it_advances() {
     let Some(db) = migrated_database().await else {
         return;
     };
     let store = initialized(&db.url).await;
-    store.ack_alerts(5).await.expect("ack 5");
-    store.ack_alerts(3).await.expect("ack 3");
-
     let client = connect(&db.url).await;
-    let acked: i64 = client
-        .query_one("SELECT acked_seq FROM monitor_state", &[])
-        .await
-        .expect("acked_seq")
-        .get(0);
+    let state_row = async || -> (String, i64) {
+        let row = client
+            .query_one("SELECT ctid::text, acked_seq FROM monitor_state", &[])
+            .await
+            .expect("state row");
+        (row.get(0), row.get(1))
+    };
+
+    store.ack_alerts(5).await.expect("ack 5");
+    let (version, acked) = state_row().await;
     assert_eq!(acked, 5);
+
+    store.ack_alerts(5).await.expect("ack 5 again");
+    store.ack_alerts(3).await.expect("ack 3");
+    assert_eq!(state_row().await, (version.clone(), 5));
+
+    store.ack_alerts(7).await.expect("ack 7");
+    let (advanced, acked) = state_row().await;
+    assert_eq!(acked, 7);
+    assert_ne!(advanced, version);
 }
 
 #[tokio::test]
