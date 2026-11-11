@@ -1,0 +1,118 @@
+[
+  {
+    "input": "José da Silva",
+    "output": "JOSE DA SILVA"
+  },
+  {
+    "input": "  tales\n\tSABÍNI  ",
+    "output": "TALES SABINI"
+  },
+  {
+    "input": "Conceição Ávila Müller",
+    "output": "CONCEICAO AVILA MULLER"
+  },
+  {
+    "input": "0021805e",
+    "output": "0021805E"
+  },
+  {
+    "input": "Straße",
+    "output": "STRAßE"
+  },
+  {
+    "input": "é",
+    "output": "E"
+  },
+  {
+    "input": "Nº 12",
+    "output": "NO 12"
+  },
+  {
+    "input": "1º",
+    "output": "1O"
+  },
+  {
+    "input": "²",
+    "output": "2"
+  },
+  {
+    "input": "Ⅻ",
+    "output": "XII"
+  },
+  {
+    "input": "ﬁscal",
+    "output": "FISCAL"
+  },
+  {
+    "input": "Ｔａｌｅｓ",
+    "output": "TALES"
+  },
+  {
+    "input": "a b",
+    "output": "A B"
+  },
+  {
+    "input": "a  b",
+    "output": "A B"
+  },
+  {
+    "input": "a b",
+    "output": "A B"
+  },
+  {
+    "input": "a　b",
+    "output": "A B"
+  },
+  {
+    "input": "ab",
+    "output": "A B"
+  },
+  {
+    "input": "a​b",
+    "output": "A​B"
+  },
+  {
+    "input": "a\tb",
+    "output": "A B"
+  },
+  {
+    "input": "́",
+    "output": ""
+  },
+  {
+    "input": "का",
+    "output": "का"
+  },
+  {
+    "input": "a⃝",
+    "output": "A⃝"
+  },
+  {
+    "input": "ǅ",
+    "output": "DZ"
+  },
+  {
+    "input": "ı",
+    "output": "I"
+  },
+  {
+    "input": "İstanbul",
+    "output": "ISTANBUL"
+  },
+  {
+    "input": "ŉ",
+    "output": "ʼN"
+  },
+  {
+    "input": "ᾳ",
+    "output": "Α"
+  },
+  {
+    "input": "",
+    "output": ""
+  },
+  {
+    "input": "   ",
+    "output": ""
+  }
+]

@@ -1,0 +1,36 @@
+[package]
+name = "diario-alerr"
+version = "2.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "diario_alerr"
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["now"] }
+deadpool-postgres = { version = "0.14.2", default-features = false, features = ["rt_tokio_1"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
+htmlize = { version = "=1.1.0", default-features = false, features = ["entities"] }
+monitor-hub-plugin = { git = "https://github.com/ItzTas/monitor-hub", tag = "sdk-rust/v0.1.1", features = ["postgres"] }
+prost-types = "0.14.4"
+reqwest = { version = "0.13.5", default-features = false, features = ["gzip", "http2", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["fs", "io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-postgres = { version = "0.7.18", features = ["with-chrono-0_4"] }
+tonic = { version = "0.14.8", default-features = false, features = ["codegen"] }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+unicode-normalization = "=0.1.25"
+unicode-properties = { version = "=0.1.4", default-features = false, features = ["general-category"] }
+webpki-root-certs = "1.0.11"
+
+[dev-dependencies]
+axum = { version = "0.8.9", default-features = false, features = ["http1", "query", "tokio"] }
+monitor-hub-plugin-testkit = { git = "https://github.com/ItzTas/monitor-hub", tag = "sdk-rust/v0.1.1" }
+tokio = { version = "1.54.1", features = ["macros", "net", "rt"] }
+tonic = { version = "0.14.8", default-features = false, features = ["channel"] }
+tonic-prost = { version = "0.14.8", default-features = false }

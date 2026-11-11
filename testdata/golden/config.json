@@ -1,0 +1,248 @@
+{
+  "split_terms": [
+    {
+      "input": " TALES SABINI , 0021805e,, ",
+      "output": [
+        "TALES SABINI",
+        "0021805e"
+      ]
+    },
+    {
+      "input": "",
+      "output": []
+    },
+    {
+      "input": " , ,",
+      "output": []
+    },
+    {
+      "input": "a,,b",
+      "output": [
+        "a",
+        "b"
+      ]
+    },
+    {
+      "input": " José ",
+      "output": [
+        "José"
+      ]
+    },
+    {
+      "input": "a;b",
+      "output": [
+        "a;b"
+      ]
+    }
+  ],
+  "start_after": [
+    {
+      "input": "",
+      "now": "2026-11-09T12:00:00Z",
+      "output": "2026-11-06T12:00:00Z",
+      "error": null
+    },
+    {
+      "input": "2026-11-01",
+      "now": "2026-11-09T12:00:00Z",
+      "output": "2026-11-01T00:00:00Z",
+      "error": null
+    },
+    {
+      "input": "2026-11-01T08:30:00",
+      "now": "2026-11-09T12:00:00Z",
+      "output": "2026-11-01T08:30:00Z",
+      "error": null
+    },
+    {
+      "input": "2026-11-01T08:30:00-04:00",
+      "now": "2026-11-09T12:00:00Z",
+      "output": "2026-11-01T12:30:00Z",
+      "error": null
+    },
+    {
+      "input": "2026-11-01T08:30:00Z",
+      "now": "2026-11-09T12:00:00Z",
+      "output": "2026-11-01T08:30:00Z",
+      "error": null
+    },
+    {
+      "input": "2026-11-01T08:30:00.25+00:00",
+      "now": "2026-11-09T12:00:00Z",
+      "output": "2026-11-01T08:30:00.25Z",
+      "error": null
+    },
+    {
+      "input": "2026-11-01T08:30:00.1234567891Z",
+      "now": "2026-11-09T12:00:00Z",
+      "output": "2026-11-01T08:30:00.123456789Z",
+      "error": null
+    },
+    {
+      "input": "2026-11-01t08:30:00z",
+      "now": "2026-11-09T12:00:00Z",
+      "output": null,
+      "error": "START_AFTER must be a date (2006-01-02) or an RFC 3339 timestamp: \"2026-11-01t08:30:00z\""
+    },
+    {
+      "input": "2026-11-01 08:30:00Z",
+      "now": "2026-11-09T12:00:00Z",
+      "output": null,
+      "error": "START_AFTER must be a date (2006-01-02) or an RFC 3339 timestamp: \"2026-11-01 08:30:00Z\""
+    },
+    {
+      "input": "2026-11-01T8:30:00Z",
+      "now": "2026-11-09T12:00:00Z",
+      "output": "2026-11-01T08:30:00Z",
+      "error": null
+    },
+    {
+      "input": "2026-11-01T08:30Z",
+      "now": "2026-11-09T12:00:00Z",
+      "output": null,
+      "error": "START_AFTER must be a date (2006-01-02) or an RFC 3339 timestamp: \"2026-11-01T08:30Z\""
+    },
+    {
+      "input": "2026-11-01T08:30:00+24:00",
+      "now": "2026-11-09T12:00:00Z",
+      "output": "2026-10-31T08:30:00Z",
+      "error": null
+    },
+    {
+      "input": "01/11/2026",
+      "now": "2026-11-09T12:00:00Z",
+      "output": null,
+      "error": "START_AFTER must be a date (2006-01-02) or an RFC 3339 timestamp: \"01/11/2026\""
+    },
+    {
+      "input": "2026-02-30",
+      "now": "2026-11-09T12:00:00Z",
+      "output": null,
+      "error": "START_AFTER must be a date (2006-01-02) or an RFC 3339 timestamp: \"2026-02-30\""
+    }
+  ],
+  "interval": [
+    {
+      "input": "",
+      "nanoseconds": 1800000000000,
+      "error": null
+    },
+    {
+      "input": "30",
+      "nanoseconds": 1800000000000,
+      "error": null
+    },
+    {
+      "input": "0.5",
+      "nanoseconds": 30000000000,
+      "error": null
+    },
+    {
+      "input": "+5",
+      "nanoseconds": 300000000000,
+      "error": null
+    },
+    {
+      "input": "3e1",
+      "nanoseconds": 1800000000000,
+      "error": null
+    },
+    {
+      "input": ".5",
+      "nanoseconds": 30000000000,
+      "error": null
+    },
+    {
+      "input": "5.",
+      "nanoseconds": 300000000000,
+      "error": null
+    },
+    {
+      "input": "1.5e-3",
+      "nanoseconds": 90000000,
+      "error": null
+    },
+    {
+      "input": "0",
+      "nanoseconds": null,
+      "error": "CHECK_INTERVAL_MINUTES must be a positive number: \"0\""
+    },
+    {
+      "input": "-1",
+      "nanoseconds": null,
+      "error": "CHECK_INTERVAL_MINUTES must be a positive number: \"-1\""
+    },
+    {
+      "input": "half",
+      "nanoseconds": null,
+      "error": "CHECK_INTERVAL_MINUTES must be a positive number: \"half\""
+    },
+    {
+      "input": " 30",
+      "nanoseconds": null,
+      "error": "CHECK_INTERVAL_MINUTES must be a positive number: \" 30\""
+    },
+    {
+      "input": "1_0",
+      "nanoseconds": 600000000000,
+      "error": null
+    }
+  ],
+  "required": [
+    {
+      "database_url": "",
+      "watch_terms": "TALES SABINI",
+      "error": "DATABASE_URL is empty: set the Postgres address"
+    },
+    {
+      "database_url": "",
+      "watch_terms": "",
+      "error": "DATABASE_URL is empty: set the Postgres address"
+    },
+    {
+      "database_url": "postgres://x@db/diario",
+      "watch_terms": "",
+      "error": "WATCH_TERMS is empty: set at least one name or registration number"
+    },
+    {
+      "database_url": "postgres://x@db/diario",
+      "watch_terms": " , ,",
+      "error": "WATCH_TERMS is empty: set at least one name or registration number"
+    },
+    {
+      "database_url": "postgres://x@db/diario",
+      "watch_terms": "TALES SABINI",
+      "error": null
+    }
+  ],
+  "precedence": [
+    {
+      "database_url": "postgres://x@db/diario",
+      "watch_terms": "TALES SABINI",
+      "check_interval_minutes": "half",
+      "start_after": "01/11/2026",
+      "error": "CHECK_INTERVAL_MINUTES must be a positive number: \"half\""
+    },
+    {
+      "database_url": "",
+      "watch_terms": "TALES SABINI",
+      "check_interval_minutes": "half",
+      "start_after": "",
+      "error": "DATABASE_URL is empty: set the Postgres address"
+    },
+    {
+      "database_url": "postgres://x@db/diario",
+      "watch_terms": "",
+      "check_interval_minutes": "half",
+      "start_after": "01/11/2026",
+      "error": "WATCH_TERMS is empty: set at least one name or registration number"
+    },
+    {
+      "database_url": "postgres://x@db/diario",
+      "watch_terms": "TALES SABINI",
+      "check_interval_minutes": "",
+      "start_after": "01/11/2026",
+      "error": "START_AFTER must be a date (2006-01-02) or an RFC 3339 timestamp: \"01/11/2026\""
+    }
+  ]
+}

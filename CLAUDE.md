@@ -4,125 +4,224 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # diario-alerr
 
-Watches the ALE/RR Official Gazette (the PDF editions published on `diarios.al.rr.leg.br`) for a
-list of names or registration numbers, and alerts through Telegram, ntfy and an RSS feed when one of
-them shows up. Written in Go. The root `main.go` only builds and starts the pieces; the code lives
-in the packages under `internal/`.
+A monitor-hub plugin. It watches the ALE/RR Official Gazette (the PDF editions published on
+`diarios.al.rr.leg.br`) for a list of names or registration numbers, and records an alert when one
+of them shows up. The hub reads those alerts as events and sends the notifications. The plugin is
+written in Rust on the monitor-hub plugin SDK (`monitor-hub-plugin`, git tag `sdk-rust/v0.1.1`).
 
-**Before creating or moving a directory, package, module, migration or query, read
-`.claude/skills/project-structure/SKILL.md`.** It holds the full layout, the module layering and
-the persistence workflow.
+The image does not run on its own. It holds `/plugin/plugin.json` and `/plugin/diario-alerr`, and
+the hub's image build copies that directory in. Release `1.0.0` was a standalone Go service; its
+code is gone from the tree, and the tag `v1.0.0` stays as the reference for the compatibility
+tests and for rollback.
+
+**Before creating or moving a module, test file, migration or any config/scaffolding file, read
+`.claude/skills/project-structure/SKILL.md`.** It holds the full layout and the persistence
+workflow.
 
 ## Code
 
-- **Do not write comments in the code.** No line, block or doc comments. Names of functions, types
-  and variables explain what the code does. Compiler directives such as `//go:embed` and
-  `//go:build` are not comments and stay allowed.
-- **English everywhere**: identifiers, packages, file and directory names, SQL tables and columns,
-  migration names, logs, error messages, the alert text, the feed and the docs.
-- Only export what another package uses.
+- **Do not write comments in the code.** No `//`, `///` or `//!`. Names explain what the code
+  does. Attributes such as `#[cfg(test)]` are not comments.
+- **English everywhere**: identifiers, file names, SQL, logs, error messages, the alert text and
+  the docs.
+- Only make `pub` what another module or the integration tests in `tests/` use. Everything else is
+  `pub(crate)` or private.
+- `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings` stay clean.
+- Prefer guard clauses and small functions over `else` branches, and a map over a chain of
+  `match`/`if` arms when the code only maps keys to values.
+- All time is UTC (`chrono::Utc`). Nothing reads the local time zone or `TZ`.
+- `DATABASE_URL` carries the password. It never appears in a log, an error, a `Debug` output or a
+  gRPC message, and `Config` does not derive `Debug`.
 
 ## Commands
 
 ```bash
-go build ./...
-go vet ./...
-go test ./...                 # needs initdb/postgres on the machine or TEST_DATABASE_URL
-golangci-lint run ./...
-go tool sqlc generate         # regenerate internal/db from sql/schema + sql/queries
-go tool air                   # hot reload, reads .env (.air.toml)
-make check                    # gofmt + vet + golangci-lint + go test -race
-docker compose up -d          # app + postgres:18
+cargo build
+cargo test                    # see Tests for what needs Postgres, pdftotext or go
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+make check                    # fmt + clippy + test
+make up                       # docker compose up -d: development Postgres on 127.0.0.1:5432
+make down
+docker buildx build --platform linux/amd64,linux/arm64 .
 git config core.hooksPath .githooks   # once per clone
 ```
 
-- Tests that touch the database go through `internal/core/coretest`. The `TestMain` of each such
-  package (`database_test.go`) calls `coretest.Run`, which starts a throwaway Postgres with the
-  machine's `initdb` and `postgres` in a `/tmp` directory, killed with the test process, and
-  migrates a template database once. Each test gets a fresh copy with `coretest.Database(t)` (an
-  address) or `coretest.Pool(t)` (an open pool). With `TEST_DATABASE_URL` set it uses that server
-  instead. With `CI` set, a missing Postgres fails the run instead of skipping the tests. A new
-  package with database tests needs its own `database_test.go`.
-- The scan tests and the root integration tests need `pdftotext` (poppler); they skip without it
-  locally and fail without it in CI.
-- The root `integration_test.go` builds the whole app with the same `assemble` as `main.go`,
-  against a fake gazette site (`internal/gazette/gazettetest`, which also generates the PDFs) and
-  fake ntfy/Telegram servers. Restarting is calling `assemble` again on the same database.
-- CI (`.github/workflows/docker.yml`) runs gofmt, `go vet` and `go test -race` against a Postgres
-  service, then builds the multi-arch image (amd64/arm64) and publishes it to `ghcr.io` on pushes
-  to `main` and on `v*` tags.
+The pre-commit hook runs `cargo fmt --check` and `cargo test`. The commit-msg hook enforces
+Conventional Commits.
 
-## Configuration (environment variables)
+## Tests
 
-`core.Load` reads `.env` first when it exists (a missing file is fine) and then the environment.
-`.env.example` documents every variable.
+Some tests need tools from outside the crate. When one is missing they print a `skipping:` notice
+on stderr and return. When `CI` is set and not empty they panic instead, so CI never passes by
+skipping.
 
-- `DATABASE_URL` (required): Postgres address. The schema is migrated at boot.
+- Postgres: the SDK test kit's `database()` gives each test its own database. It uses
+  `TEST_DATABASE_URL` when set (the compose Postgres works, see `.env.example`), and otherwise
+  starts a throwaway cluster with `initdb` and `postgres` from `PATH`.
+  `tests/support::migrated_database` adds the migrations.
+- `pdftotext` (poppler) for the PDF scans, and for every test that starts the binary, because
+  start-up checks for it.
+- `sh` with `kill` for the tests that start the binary and signal it.
+- `go`, `git` and the tag `v1.0.0` for `tests/go_compat.rs`. It extracts the Go release with
+  `git archive v1.0.0`, builds it, and caches the binary under `target/tmp/go-v1.0.0/`. A shallow
+  clone has no tag, so CI checks out the full history.
+- The conformance command for `tests/conformance.rs`: the binary named by `PLUGIN_CONFORMANCE`,
+  or else `go install` of `plugin-conformance` at the SDK's Go tag `sdk/v0.2.1`, cached under
+  `~/.cache/monitor-hub/plugin-conformance/`.
+
+The SDK refuses Unix socket paths longer than 100 bytes, so a long `TMPDIR` breaks the tests that
+start the plugin. The same holds for the plugin itself under the hub, where `TMPDIR` is `/tmp`.
+
+Golden vectors: `testdata/golden/` holds files generated by the Go release `v1.0.0` (normalization,
+term matching, alert text, configuration, WordPress dates, HTML entities, the listing query and a
+fake PDF). The Rust tests read them through `src/golden.rs` and must match them. The generator
+left with the Go code, so the files are frozen. A difference is a bug in the Rust code, never a
+reason to edit a vector.
+
+CI (`.github/workflows/docker.yml`) runs `cargo fmt --check`, clippy and `cargo test --locked`
+against a `postgres:18-alpine` service, with Go 1.27.2 and poppler installed. Then it builds the
+image for amd64 and arm64 and publishes it to `ghcr.io` on every run that is not a pull request:
+pushes to `main`, `v*` tags and manual runs. A `v*` tag gets the version tags (`2.0.0` and `2.0`),
+only the default branch moves `latest`, and every image gets a `sha-` tag.
+
+## Configuration
+
+Under monitor-hub, set these on the hub with the `DIARIO__` prefix (`DIARIO__WATCH_TERMS` and so
+on). The hub removes the prefix before it starts the plugin. The plugin reads only its
+environment, never a `.env` file. `.env.example` lists every variable except `GAZETTE_API_URL`,
+which only the tests set.
+
+- `DATABASE_URL` (required): Postgres address. The plugin connects without TLS.
 - `WATCH_TERMS` (required): comma-separated names or registration numbers. Matching ignores case,
   accents and repeated whitespace.
-- `CHECK_INTERVAL_MINUTES` (default 30).
-- `START_AFTER`: date (`2006-01-02`) or RFC 3339 timestamp of the first edition to consider. Only
-  used the first time, when the database has no state yet. Default: three days ago.
-- `STATE_FILE`: the `state.json` of earlier, file-based versions. When it exists and the database
-  has no state yet, its cursor, seen editions, alerts and deliveries are imported instead of
-  sending the welcome alert. The compose file points it at `/data/state.json`.
-- `PUBLIC_URL`: link of the RSS channel (compose builds it from `PUBLIC_HOST`). `HTTP_PORT`
-  (default 8080).
-- `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` turn on Telegram; `NTFY_URL` (+ `NTFY_TOPIC`, default
-  `diario-alerr`, and optional `NTFY_TOKEN`) turns on ntfy.
-- `GAZETTE_API_URL` and `TELEGRAM_API_URL` override the upstream addresses; only the tests use them.
+- `CHECK_INTERVAL_MINUTES` (default 30): a positive decimal number of minutes.
+- `START_AFTER`: when the first edition to consider was published. A date (`2006-01-02`), an
+  RFC 3339 timestamp, or a timestamp without a zone (`2006-01-02T15:04:05`, read as UTC). Only
+  used the first time, when the database has no state yet. Default: 72 hours before the start.
+- `GAZETTE_API_URL` overrides the gazette's media API address. Only the tests use it.
 
-## Architecture
+The hub also passes `PATH`, `TZ`, `TMPDIR` and `MONITOR_HUB_DATA_DIR`. The plugin ignores `TZ`
+and keeps all its state in Postgres. Each PDF is downloaded to a temporary file in `TMPDIR`.
 
-### Packages
+## Process contract
 
-- `internal/core`: what every package uses, one file per subject: `config.go` (`Config`, `Load`),
-  `database.go` (`OpenDatabase`: migrate, open the pgx pool, ping), `http.go` (`Get`/`PostJSON`
-  with the user agent; errors never carry the URL, so the Telegram token never reaches a log) and
-  `alert.go` (`Alert` and the gazette constants).
-- `internal/gazette`: the WordPress media API client (`ListEditions`, paginated by
-  `X-WP-TotalPages`), PDF download and text extraction through `pdftotext` (`pdf.go`) and the term
-  matching (`match.go`: `Normalize`, `FindTerms`, the snippet around the first hit).
-- `internal/notify`: one `Sender` per channel (`telegram.go`, `ntfy.go`); `Channels` returns the
-  enabled ones by name.
-- `internal/watch`: the monitor. `service.go` runs one cycle, `cycle.go` is the periodic job,
-  `repository.go` the Postgres access over sqlc, `alerts.go` the alert text, `statefile.go` the
-  import of the old `state.json`.
-- `internal/modules/feed` (`GET /feed.xml`) and `internal/modules/health` (`GET /healthz`): HTTP
-  modules in layers `types` / `repository` / `service` / `handler` / `routes`.
-- `internal/db`: generated by sqlc. **Never edit it by hand.**
-- `sql/schema`: goose migrations, embedded and applied at boot by `schema.Migrate`.
-  `sql/queries`: the sqlc queries.
+- The hub starts `diario-alerr plugin` with its cookie variable. Started any other way, the binary
+  prints the SDK's `NOT_LAUNCHED_BY_HUB` text on stderr and exits 1.
+- Stdout carries only the handshake line. Logs go to stderr as JSON lines.
+- Start-up reads the configuration, checks that `pdftotext -v` runs, takes the database writer
+  lock, removes leftover PDFs, applies the migrations, opens the pool, reads the newest alert `seq`
+  and prepares the monitor state, all before the handshake. Each connection attempt has 10 s,
+  `pdftotext -v` has 5 s, and the whole sequence has 45 s, because the hub kills a plugin that has
+  not answered in 60 s.
+- The `pdftotext` check exists because nothing else runs it until a new edition arrives. A hub
+  image without poppler, or with a broken one, shows up as a plugin that does not start instead of
+  one that fails on the next edition.
+- Leftover PDFs are files in `TMPDIR` named like the plugin's own downloads (`edition-`, six
+  letters or digits, `.pdf`). A process killed during a scan leaves one behind. Only one process
+  holds the lock, so after taking it the plugin deletes them. It deletes regular files only and
+  never follows a symbolic link. A failure is logged at `warn` and start-up goes on.
+- Exit code 0 means a clean stop (SIGTERM or SIGINT), with no `fatal` line. When the plugin exits
+  1 because of a configuration error, a failed start-up step or a lost database lock, it writes
+  exactly one JSON `fatal` line at `error` level. Its `error` field holds the configuration error,
+  names the start-up step that failed (for example `checking pdftotext: ...` or `acquiring the
+  database writer lock: ...`), or starts with `the database lock was lost`. A run outside the hub
+  and a failure to start logging or the async runtime also exit 1, without a `fatal` line. The hub
+  restarts the plugin with a backoff.
+- A second process on the same database fails at start-up with `another diario-alerr process holds
+  the database lock` and migrates nothing.
+- `Describe` names the plugin `diario` with two event kinds: `welcome` (info) and `term_found`
+  (urgent). `Status` answers `FAILING` with the hub-ahead text below while the last `Events` call
+  found the hub ahead of the database. Otherwise it answers `CHECKING` during a cycle, `FAILING`
+  with a one-line message when the last cycle did not finish or the database does not answer, and
+  `IDLE` otherwise. That message is cut at 300 characters, and so is the `edition` log field,
+  because both can carry text from the gazette site such as an edition title. Errors built from
+  gazette data cut that text the same way (a `date_gmt`, a PDF URL, a JSON decoding message), so a
+  logged error stays far below the 64 KiB line the hub keeps. `Check` starts a cycle now, or
+  refuses with `a check is already running`.
+- `Events(after, limit)` returns the alerts with a `seq` above `after`, in order, exactly
+  `min(limit, available)` of them, except during the first read (next item). A `limit` of 0 means
+  100, and the maximum is 500. Each call acknowledges every alert up to `after`, and writes the
+  state row only when that position moves forward.
+- The first read stops at the newest `seq` that existed at start-up. Until one `Events` call
+  returns a page shorter than its limit, which is how the hub sees the end of a read, `Events`
+  leaves out every newer alert. After that call nothing is left out. This is for the hub's
+  baseline: the hub stores the first read of a plugin it does not know and never announces it,
+  and that read comes about 15 s after the start, while the first cycle records its alerts in a
+  few seconds. Without the limit, whatever the first cycle finds would be absorbed as history; on
+  a take-over from the Go release, that means every edition Go had not recorded yet. With it, those
+  alerts go out on the next poll as normal events. A hub that already knows the plugin gets them
+  one poll (15 s) later. On a new database the welcome alert is newer than that `seq`, so the hub
+  announces it.
+- That limit belongs to one process. If the plugin restarts, alone or with the hub, after its first
+  cycle recorded alerts and before the hub's first read finished, the new process counts those
+  alerts as history: its boundary includes them and the baseline absorbs them. The same happens
+  when the hub received the short page but failed to store it. If anything restarts before the hub
+  logs `baseline complete` for `diario`, check by hand. Wait a minute after that line, then look in
+  the plugin's database for alerts at or below the acknowledged position that nobody was told about:
 
-Who imports whom: everyone may use `core` and `db`; `watch` uses `gazette` and `notify`; the
-modules use only `core` and `db`. `main.go` is the only place that knows every package.
+  ```sql
+  SELECT a.seq, a.id, a.title, a.link, a.published_at, s.seen_at
+  FROM alerts a
+  LEFT JOIN seen_editions s ON a.id = 'edition-' || s.edition_id
+  WHERE a.seq <= (SELECT acked_seq FROM monitor_state)
+  ORDER BY a.seq DESC
+  LIMIT 20;
+  ```
 
-### Flow of a cycle
+  `seen_at` is when the plugin recorded the edition, so the alerts recorded around the restart
+  stand out. On a database taken over from the Go release, an alert with rows in
+  `alert_deliveries` was already sent by Go.
+- When the database is down, `Events` answers `UNAVAILABLE` and `Status` answers `FAILING`, both
+  with `the database is unavailable`, without the address or the password.
 
-`main.go` loads the config, calls `assemble` (open and migrate the database, build the watcher,
-`watch.Service.Prepare`, register the HTTP modules on one `http.ServeMux`) and runs the cycle job
-and the HTTP server in an `errgroup` until SIGINT/SIGTERM.
+When `the hub is ahead of this database: reset the hub's position for this plugin` appears at
+`error` level, the hub asked for alerts after a `seq` this database never issued. That happens when
+the plugin's database was reset or replaced and the hub's stored position for `diario` was not.
+Until the two agree, `Events` returns no events and acknowledges nothing, and `Status` answers
+`FAILING` with that text. The first `Events` call that finds the two in line clears it. Reset both
+together. The plugin logs that line once per process.
 
-1. `Prepare` creates the single `monitor_state` row the first time: from `STATE_FILE` when it
-   exists, otherwise with the cursor at `START_AFTER` and a queued welcome alert.
-2. Each cycle lists the PDF editions published after `cursor - 24h`, drops the ones in
-   `seen_editions`, and scans the rest two at a time.
+## Flow of a cycle
+
+The scheduler runs a cycle at start, then one interval after each cycle ends. `Check` starts one
+early.
+
+1. At start-up, `Monitor::prepare` creates the single `monitor_state` row the first time, with the
+   cursor at `START_AFTER` and a queued welcome alert.
+2. A cycle lists the PDF editions published after `cursor - 24h`, following `X-WP-TotalPages`,
+   drops the ones in `seen_editions`, and scans the rest two at a time: download, then
+   `pdftotext` with a 300 s limit.
 3. Results are recorded in publication order. Each edition is marked seen, the cursor only moves
    forward, and a match inserts an alert, all in one transaction. The first edition that fails to
    download or parse stops the recording, so it and the ones after it are retried next cycle.
    `last_success_at` is only written when the whole scan went through.
-4. Every enabled channel gets the alerts it has no row for in `alert_deliveries`, oldest first. A
-   failed send stops that channel until the next cycle and leaves the others alone.
-5. Pruning keeps the newest 1000 seen editions and the newest 100 alerts.
+4. Pruning keeps the newest 1000 seen editions. Alerts go only when the hub has acknowledged them
+   and they are not among the newest 100.
 
-`/healthz` answers 503 when the last successful scan (or the boot, before the first one) is older
-than three intervals. The feed lists the newest 100 alerts, newest first.
+The gazette client stops at four limits that the Go release did not have: 100 listing pages,
+4 MiB per listing page, 256 MiB per PDF, and 64 MiB of text from `pdftotext`. Each has its own
+error, which ends the cycle as incomplete. Every HTTP request has a total timeout of 60 s. It also
+refuses an edition whose `date_gmt` is before year 1. The Go release accepted year 0, but the hub
+cannot store such an event and would reject every page from then on.
 
-### Persistence
+## Persistence
 
-- A schema change is a new migration `sql/schema/0000N_name.sql` with `-- +goose Up`/`Down`.
-  **Never edit a migration that already exists.**
-- Queries live in `sql/queries/*.sql`; run `go tool sqlc generate` after changing them or the
-  schema and commit the regenerated `internal/db`. `timestamptz` maps to `time.Time` (`*time.Time`
-  when nullable), see `sqlc.yaml`.
-- Writes that must land together go through the repository's `inTx`.
+- A schema change is a new file `sql/schema/0000N_name.sql` in goose format (`-- +goose Up` and
+  `-- +goose Down`) and a new entry in `MIGRATIONS` in `src/store.rs`. **Never edit a migration
+  that already exists.** The SDK's `migrate::up` applies them on the writer lock's connection and
+  keeps goose's version table, so the Go release reads the same database.
+- All SQL lives in `src/store.rs`. Every transaction that inserts an alert locks the state row
+  first, so the order of `seq` values is the order of the commits.
+- Pool connections run with a 20 s `statement_timeout`, a 5 s `lock_timeout`, TCP keepalives and
+  a 60 s `tcp_user_timeout`. The writer lock's connection has the same keepalives but no statement
+  timeout, because it runs the migrations.
+- The Go release's `alert_deliveries` table stays, and nothing writes to it.
+
+## Rollback to the Go release
+
+Stop the plugin, run `sql/rollback/mark-alerts-delivered.sql` against its database, then start
+`ghcr.io/itztas/diario-alerr:1.0.0` on that database. The script marks every stored alert as
+delivered on Telegram and ntfy, so the Go release does not send again what the hub already sent.
+That includes alerts the hub stored but had not delivered yet. After the rollback nobody sends
+those, so look for pending deliveries on the hub before running it.
