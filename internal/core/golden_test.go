@@ -20,17 +20,34 @@ type startAfterCase struct {
 	Input  string  `json:"input"`
 	Now    string  `json:"now"`
 	Output *string `json:"output"`
+	Error  *string `json:"error"`
 }
 
 type intervalCase struct {
-	Input       string `json:"input"`
-	Nanoseconds *int64 `json:"nanoseconds"`
+	Input       string  `json:"input"`
+	Nanoseconds *int64  `json:"nanoseconds"`
+	Error       *string `json:"error"`
+}
+
+type requiredCase struct {
+	DatabaseURL string  `json:"database_url"`
+	WatchTerms  string  `json:"watch_terms"`
+	Error       *string `json:"error"`
 }
 
 type configVectorSet struct {
 	SplitTerms []splitCase      `json:"split_terms"`
 	StartAfter []startAfterCase `json:"start_after"`
 	Interval   []intervalCase   `json:"interval"`
+	Required   []requiredCase   `json:"required"`
+}
+
+func errorText(err error) *string {
+	if err == nil {
+		return nil
+	}
+	text := err.Error()
+	return &text
 }
 
 func configVectors(t *testing.T) configVectorSet {
@@ -51,7 +68,9 @@ func configVectors(t *testing.T) configVectorSet {
 		"01/11/2026", "2026-02-30",
 	} {
 		c := startAfterCase{Input: input, Now: now.Format(time.RFC3339Nano)}
-		if parsed, err := ParseStartAfter(input, func() time.Time { return now }); err == nil {
+		parsed, err := ParseStartAfter(input, func() time.Time { return now })
+		c.Error = errorText(err)
+		if err == nil {
 			formatted := parsed.UTC().Format(time.RFC3339Nano)
 			c.Output = &formatted
 		}
@@ -59,20 +78,44 @@ func configVectors(t *testing.T) configVectorSet {
 	}
 
 	for _, input := range []string{"", "30", "0.5", "+5", "3e1", ".5", "5.", "1.5e-3", "0", "-1", "half", " 30", "1_0"} {
-		set.Interval = append(set.Interval, intervalCase{Input: input, Nanoseconds: intervalNanoseconds(t, input)})
+		set.Interval = append(set.Interval, intervalCase{Input: input, Nanoseconds: intervalNanoseconds(t, input), Error: intervalError(t, input)})
+	}
+
+	for _, c := range []requiredCase{
+		{DatabaseURL: "", WatchTerms: "TALES SABINI"},
+		{DatabaseURL: "postgres://x@db/diario", WatchTerms: ""},
+		{DatabaseURL: "postgres://x@db/diario", WatchTerms: " , ,"},
+		{DatabaseURL: "postgres://x@db/diario", WatchTerms: "TALES SABINI"},
+	} {
+		t.Setenv("DATABASE_URL", c.DatabaseURL)
+		t.Setenv("WATCH_TERMS", c.WatchTerms)
+		t.Setenv("CHECK_INTERVAL_MINUTES", "")
+		t.Setenv("START_AFTER", "")
+		_, err := FromEnvironment(time.Now)
+		c.Error = errorText(err)
+		set.Required = append(set.Required, c)
 	}
 	return set
 }
 
-func intervalNanoseconds(t *testing.T, input string) *int64 {
+func intervalConfig(t *testing.T, input string) (Config, error) {
 	t.Setenv("DATABASE_URL", "x")
 	t.Setenv("WATCH_TERMS", "x")
 	t.Setenv("CHECK_INTERVAL_MINUTES", input)
 	t.Setenv("START_AFTER", "")
-	cfg, err := FromEnvironment(time.Now)
+	return FromEnvironment(time.Now)
+}
+
+func intervalNanoseconds(t *testing.T, input string) *int64 {
+	cfg, err := intervalConfig(t, input)
 	if err != nil {
 		return nil
 	}
 	nanoseconds := int64(cfg.Interval)
 	return &nanoseconds
+}
+
+func intervalError(t *testing.T, input string) *string {
+	_, err := intervalConfig(t, input)
+	return errorText(err)
 }
