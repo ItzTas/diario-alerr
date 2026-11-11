@@ -5,5 +5,6 @@ pub mod gazette;
 #[cfg(test)]
 mod golden;
 mod pdf;
+pub mod store;
 pub mod text;
 pub mod timestamp;
