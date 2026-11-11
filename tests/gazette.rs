@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::extract::Query;
-use axum::http::{StatusCode, Uri};
+use axum::http::{HeaderValue, StatusCode, Uri};
+use axum::response::IntoResponse;
 use axum::routing::get;
 use chrono::{DateTime, Utc};
 use diario_alerr::domain::Edition;
@@ -189,6 +190,41 @@ async fn list_editions_accepts_only_200() {
     let error = client.list_editions(Utc::now()).await.unwrap_err();
 
     assert!(error.to_string().contains("204 No Content"), "{error}");
+}
+
+#[tokio::test]
+async fn an_unusable_total_pages_header_means_one_page() {
+    for header in [None, Some(""), Some("abc"), Some("2.5"), Some("0x2")] {
+        let requests = Arc::new(Mutex::new(0));
+        let counted = Arc::clone(&requests);
+        let router = Router::new().route(
+            "/",
+            get(move || {
+                let counted = Arc::clone(&counted);
+                async move {
+                    *counted.lock().unwrap() += 1;
+                    let mut response =
+                        r#"[{"id": 1, "date_gmt": "2026-11-01T10:00:00"}]"#.into_response();
+                    if let Some(value) = header {
+                        response
+                            .headers_mut()
+                            .insert("X-WP-TotalPages", HeaderValue::from_static(value));
+                    }
+                    response
+                }
+            }),
+        );
+        let server = serve(router).await;
+        let client = Client::new(server.url.clone(), HTTP_TIMEOUT).unwrap();
+
+        let editions = client
+            .list_editions(utc("2026-10-31T00:00:00Z"))
+            .await
+            .unwrap();
+
+        assert_eq!(editions.len(), 1, "{header:?}");
+        assert_eq!(*requests.lock().unwrap(), 1, "{header:?}");
+    }
 }
 
 #[tokio::test]
