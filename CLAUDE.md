@@ -153,6 +153,25 @@ and keeps all its state in Postgres. Each PDF is downloaded to a temporary file 
   alerts go out on the next poll as normal events. A hub that already knows the plugin gets them
   one poll (15 s) later. On a new database the welcome alert is newer than that `seq`, so the hub
   announces it.
+- That limit belongs to one process. If the plugin restarts, alone or with the hub, after its first
+  cycle recorded alerts and before the hub's first read finished, the new process counts those
+  alerts as history: its boundary includes them and the baseline absorbs them. The same happens
+  when the hub received the short page but failed to store it. If anything restarts before the hub
+  logs `baseline complete` for `diario`, check by hand. Wait a minute after that line, then look in
+  the plugin's database for alerts at or below the acknowledged position that nobody was told about:
+
+  ```sql
+  SELECT a.seq, a.id, a.title, a.link, a.published_at, s.seen_at
+  FROM alerts a
+  LEFT JOIN seen_editions s ON a.id = 'edition-' || s.edition_id
+  WHERE a.seq <= (SELECT acked_seq FROM monitor_state)
+  ORDER BY a.seq DESC
+  LIMIT 20;
+  ```
+
+  `seen_at` is when the plugin recorded the edition, so the alerts recorded around the restart
+  stand out. On a database taken over from the Go release, an alert with rows in
+  `alert_deliveries` was already sent by Go.
 - When the database is down, `Events` answers `UNAVAILABLE` and `Status` answers `FAILING`, both
   with `the database is unavailable`, without the address or the password.
 
