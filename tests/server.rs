@@ -1,14 +1,16 @@
 mod support;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use diario_alerr::domain::Alert;
-use diario_alerr::monitor::{Monitor, MonitorOptions};
+use diario_alerr::domain::{Alert, Edition};
+use diario_alerr::monitor::{CycleOutcome, Monitor, MonitorOptions};
 use diario_alerr::scheduler::Scheduler;
 use diario_alerr::server::DiarioPlugin;
 use diario_alerr::store::{EditionRecord, Store};
+use diario_alerr::text::Hits;
 use monitor_hub_plugin::proto::plugin_server::Plugin;
 use monitor_hub_plugin::proto::{
     CheckRequest, CheckResponse, DescribeRequest, Event, EventKind, EventsRequest, Severity, State,
@@ -117,6 +119,32 @@ async fn add_alerts(url: &str, count: i32) {
         )
         .await
         .expect("insert alerts");
+}
+
+async fn add_alert(url: &str, id: &str) {
+    connect(url)
+        .await
+        .execute(
+            "INSERT INTO alerts (id, title, link, body, published_at)
+             VALUES ($1, 'title', 'https://x/late', 'body', $2)",
+            &[&id, &now()],
+        )
+        .await
+        .expect("insert an alert");
+}
+
+async fn started_after_three_alerts(url: &str) -> (DiarioPlugin<FakeGazette>, Vec<i64>) {
+    let scheduler = prepared(url, FakeGazette::new(vec![])).await;
+    add_alerts(url, 2).await;
+    let store = scheduler.monitor().store();
+    let boundary = store.last_issued_seq().await.expect("last issued seq");
+    let plugin = plugin(&scheduler).with_first_read_boundary(boundary);
+    add_alert(url, "edition-late").await;
+    let stored = store.alerts_after(0, 100).await.expect("alerts");
+    let all: Vec<i64> = stored.iter().map(|stored| stored.seq).collect();
+    assert_eq!(all.len(), 4);
+    assert_eq!(all[2], boundary);
+    (plugin, all)
 }
 
 fn seqs(events: &[Event]) -> Vec<i64> {
@@ -305,6 +333,64 @@ async fn status_fails_while_the_hub_is_ahead_of_the_database() {
     let in_line = status(&plugin).await;
     assert_eq!(in_line.state, i32::from(State::Idle));
     assert_eq!(in_line.message, "");
+}
+
+#[tokio::test]
+async fn the_first_read_holds_only_the_alerts_from_before_the_start() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let (plugin, all) = started_after_three_alerts(&db.url).await;
+
+    assert_eq!(seqs(&page(&plugin, 0, 500).await), all[..3]);
+    assert_eq!(seqs(&page(&plugin, all[2], 500).await), all[3..]);
+}
+
+#[tokio::test]
+async fn the_first_read_ends_with_its_first_short_page() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let (plugin, all) = started_after_three_alerts(&db.url).await;
+
+    assert_eq!(seqs(&page(&plugin, 0, 2).await), all[..2]);
+    assert_eq!(seqs(&page(&plugin, all[1], 2).await), all[2..3]);
+    assert_eq!(seqs(&page(&plugin, all[2], 2).await), all[3..]);
+}
+
+#[tokio::test]
+async fn on_a_new_database_the_first_read_is_empty() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let edition = Edition {
+        id: 77,
+        published: utc("2026-11-05T10:00:00Z"),
+        url: "https://x/77.pdf".to_owned(),
+        title: "ED 77".to_owned(),
+    };
+    let fake = FakeGazette::new(vec![edition]);
+    fake.with_hits(
+        77,
+        Hits {
+            pages: HashMap::from([("TALES SABINI".to_owned(), vec![1])]),
+            order: vec!["TALES SABINI".to_owned()],
+            first_page: 1,
+            snippet: "TALES SABINI".to_owned(),
+        },
+    );
+    let scheduler = unprepared(&db.url, fake);
+    let plugin = plugin(&scheduler).with_first_read_boundary(0);
+    scheduler.monitor().prepare().await.expect("prepare");
+    assert_eq!(
+        scheduler.monitor().run_cycle().await,
+        CycleOutcome::Complete
+    );
+
+    assert_eq!(page(&plugin, 0, 500).await, []);
+    let second = page(&plugin, 0, 500).await;
+    let ids: Vec<&str> = second.iter().map(|event| event.id.as_str()).collect();
+    assert_eq!(ids, ["welcome", "edition-77"]);
 }
 
 #[tokio::test]
