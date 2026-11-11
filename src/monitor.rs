@@ -10,15 +10,13 @@ use crate::alerts::{edition_alert, welcome_alert};
 use crate::domain::{Alert, Edition};
 use crate::gazette::GazetteError;
 use crate::store::{EditionRecord, Store, StoreError, chain_text};
-use crate::text::Hits;
+use crate::text::{Hits, capped};
 use crate::timestamp::Clock;
 
 const CURSOR_OVERLAP: TimeDelta = TimeDelta::hours(24);
 const SCAN_WORKERS: usize = 2;
 const MAX_SEEN: i64 = 1000;
 const MAX_ALERTS: i64 = 100;
-const MAX_SHOWN_CHARS: usize = 300;
-const CUT_MARK: char = '…';
 
 pub(crate) const DATABASE_UNAVAILABLE: &str = "the database is unavailable";
 
@@ -256,13 +254,6 @@ fn one_line(text: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     capped(&joined)
-}
-
-fn capped(text: &str) -> String {
-    let Some((cut, _)) = text.char_indices().nth(MAX_SHOWN_CHARS) else {
-        return text.to_owned();
-    };
-    format!("{}{CUT_MARK}", &text[..cut])
 }
 
 #[cfg(test)]

@@ -13,7 +13,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tracing::warn;
 
-use crate::gazette::{GazetteError, get};
+use crate::gazette::{GazetteError, get, without_long_url};
+use crate::text::capped;
 
 const PDF_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_PDF_BYTES: usize = 256 << 20;
@@ -122,7 +123,7 @@ async fn download_pages_in(
         .is_some_and(|length| length > max_bytes as u64)
     {
         return Err(GazetteError::PdfTooLarge {
-            url: url.to_owned(),
+            url: capped(url),
             limit: max_bytes,
         });
     }
@@ -160,14 +161,14 @@ async fn save(
         .chunk()
         .await
         .map_err(|source| GazetteError::Download {
-            url: url.to_owned(),
-            source,
+            url: capped(url),
+            source: without_long_url(source),
         })?
     {
         written += chunk.len();
         if written > max_bytes {
             return Err(GazetteError::PdfTooLarge {
-                url: url.to_owned(),
+                url: capped(url),
                 limit: max_bytes,
             });
         }
@@ -379,6 +380,7 @@ pub(crate) mod tests {
     };
     use crate::gazette::GazetteError;
     use crate::logtest::{captured, logged};
+    use crate::store::chain_text;
 
     const FAKE_PDF: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -665,6 +667,38 @@ pub(crate) mod tests {
                 ("message", "could not list leftover PDFs"),
             ])]
         );
+    }
+
+    #[tokio::test]
+    async fn long_pdf_urls_are_cut_in_errors() {
+        let dir = TempDir::new().unwrap();
+        let long = "a".repeat(100_000);
+        let cut_short = serve_raw(response(1000, b"%PDF-1.4\n"), false).await;
+        let missing = serve_raw(
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            false,
+        )
+        .await;
+        let too_large = serve_raw(response(1 << 20, b""), true).await;
+        let cases = [
+            (format!("{cut_short}?{long}"), MAX_PDF_BYTES),
+            (format!("{missing}?{long}"), MAX_PDF_BYTES),
+            (format!("{too_large}?{long}"), 64 << 10),
+            (format!("http://127.0.0.1:9/{long}"), MAX_PDF_BYTES),
+        ];
+        for (url, limit) in cases {
+            let error = promptly(download_pages_in(
+                &reqwest::Client::new(),
+                &url,
+                dir.path(),
+                limit,
+            ))
+            .await
+            .unwrap_err();
+
+            let text = chain_text(&error);
+            assert!(text.chars().count() < 1000, "{} characters", text.len());
+        }
     }
 
     #[tokio::test]
