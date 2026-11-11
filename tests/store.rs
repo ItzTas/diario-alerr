@@ -262,6 +262,79 @@ async fn a_failed_write_applies_nothing() {
     assert_eq!(ids(&all_alerts(&store).await), vec!["welcome"]);
 }
 
+async fn wait_for_a_lock_waiter(client: &Client) {
+    let started = Instant::now();
+    loop {
+        let waiting: i64 = client
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
+                &[],
+            )
+            .await
+            .expect("lock waiters")
+            .get(0);
+        if waiting == 1 {
+            return;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "nobody waited on the state row"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn alert_seqs_follow_commit_order() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let store = initialized(&db.url).await;
+    let mut outside = connect(&db.url).await;
+    let first = outside.transaction().await.expect("begin");
+    first
+        .execute(
+            "INSERT INTO seen_editions (edition_id) VALUES ($1) ON CONFLICT (edition_id) DO NOTHING",
+            &[&1_i64],
+        )
+        .await
+        .expect("mark seen");
+    first
+        .execute(
+            "UPDATE monitor_state SET cursor_at = GREATEST(cursor_at, $1)",
+            &[&start()],
+        )
+        .await
+        .expect("advance the cursor");
+
+    let second = store.clone();
+    let recording = tokio::spawn(async move {
+        second
+            .record_edition(&edition(2, start(), Some(alert("second", start()))))
+            .await
+    });
+    wait_for_a_lock_waiter(&connect(&db.url).await).await;
+    assert!(!recording.is_finished());
+
+    let published = start();
+    first
+        .execute(
+            "INSERT INTO alerts (id, title, link, body, published_at) VALUES ('first', 't', 'l', 'b', $1)",
+            &[&published],
+        )
+        .await
+        .expect("insert the first alert");
+    first.commit().await.expect("commit the first");
+    recording
+        .await
+        .expect("join")
+        .expect("the second record_edition");
+
+    let alerts = all_alerts(&store).await;
+    assert_eq!(ids(&alerts), vec!["welcome", "first", "second"]);
+    assert!(alerts[1].seq < alerts[2].seq);
+}
+
 #[tokio::test]
 async fn prune_keeps_the_newest_editions_and_acknowledged_alerts() {
     let Some(db) = migrated_database().await else {
