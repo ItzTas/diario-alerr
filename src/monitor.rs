@@ -128,9 +128,18 @@ impl<G: Gazette> Monitor<G> {
     async fn scan_all(&self, editions: &[Edition]) -> Vec<ScanResult> {
         let scans: Vec<_> = editions
             .iter()
-            .map(|edition| self.gazette.scan(edition, &self.options.terms))
+            .enumerate()
+            .map(|(index, edition)| {
+                let scan = self.gazette.scan(edition, &self.options.terms);
+                async move { (index, scan.await) }
+            })
             .collect();
-        stream::iter(scans).buffered(SCAN_WORKERS).collect().await
+        let mut finished: Vec<(usize, ScanResult)> = stream::iter(scans)
+            .buffer_unordered(SCAN_WORKERS)
+            .collect()
+            .await;
+        finished.sort_unstable_by_key(|(index, _)| *index);
+        finished.into_iter().map(|(_, scan)| scan).collect()
     }
 
     async fn record_in_order(

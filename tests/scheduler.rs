@@ -13,10 +13,10 @@ use diario_alerr::scheduler::Scheduler;
 use diario_alerr::store::Store;
 use diario_alerr::text::Hits;
 use tokio::task::JoinHandle;
-use tokio::time::{Instant, sleep, sleep_until};
+use tokio::time::{Instant, sleep_until};
 
 use support::fake_gazette::FakeGazette;
-use support::{fixed_clock, migrated_database, utc};
+use support::{eventually, fixed_clock, migrated_database, utc};
 
 const PATIENCE: Duration = Duration::from_secs(5);
 const HALF_HOUR: Duration = Duration::from_secs(30 * 60);
@@ -43,13 +43,6 @@ async fn scheduler<G: Gazette>(url: &str, gazette: G, interval: Duration) -> Arc
 
 fn start<G: Gazette>(scheduler: &Arc<Scheduler<G>>) -> JoinHandle<()> {
     tokio::spawn(Arc::clone(scheduler).run())
-}
-
-async fn eventually(deadline: Instant, what: &str, check: impl Fn() -> bool) {
-    while !check() {
-        assert!(Instant::now() < deadline, "timed out waiting until {what}");
-        sleep(millis(10)).await;
-    }
 }
 
 #[tokio::test]

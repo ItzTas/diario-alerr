@@ -24,6 +24,8 @@ struct State {
     failing_scans: Mutex<HashSet<i64>>,
     failing_listing: AtomicBool,
     gate_open: watch::Sender<bool>,
+    held_scans: Mutex<HashSet<i64>>,
+    scans_released: watch::Sender<bool>,
     listing_afters: Mutex<Vec<DateTime<Utc>>>,
     scans: AtomicUsize,
     running_scans: AtomicUsize,
@@ -39,6 +41,8 @@ impl FakeGazette {
                 failing_scans: Mutex::default(),
                 failing_listing: AtomicBool::new(false),
                 gate_open: watch::Sender::new(true),
+                held_scans: Mutex::default(),
+                scans_released: watch::Sender::new(true),
                 listing_afters: Mutex::default(),
                 scans: AtomicUsize::new(0),
                 running_scans: AtomicUsize::new(0),
@@ -65,6 +69,15 @@ impl FakeGazette {
 
     pub fn open_gate(&self) {
         self.state.gate_open.send_replace(true);
+    }
+
+    pub fn hold_scan(&self, id: i64) {
+        lock(&self.state.held_scans).insert(id);
+        self.state.scans_released.send_replace(false);
+    }
+
+    pub fn release_scans(&self) {
+        self.state.scans_released.send_replace(true);
     }
 
     pub fn listing_afters(&self) -> Vec<DateTime<Utc>> {
@@ -111,6 +124,11 @@ impl Gazette for FakeGazette {
                 .max_concurrent_scans
                 .fetch_max(running, Ordering::SeqCst);
             tokio::time::sleep(SCAN_TIME).await;
+            let held = lock(&state.held_scans).contains(&id);
+            if held {
+                let mut released = state.scans_released.subscribe();
+                let _ = released.wait_for(|released| *released).await;
+            }
             state.running_scans.fetch_sub(1, Ordering::SeqCst);
             if lock(&state.failing_scans).contains(&id) {
                 return Err(GazetteError::Pdftotext("pdf unavailable".to_owned()));
