@@ -1043,8 +1043,8 @@ dependencies = [
 
 [[package]]
 name = "monitor-hub-plugin"
-version = "0.1.0"
-source = "git+https://github.com/ItzTas/monitor-hub?tag=sdk-rust%2Fv0.1.0#9c22054e29d91488551a73c6b0c3c4d5d6284a8a"
+version = "0.1.1"
+source = "git+https://github.com/ItzTas/monitor-hub?tag=sdk-rust%2Fv0.1.1#6b2eacec2cd00e650194a75bd421b161d25c8449"
 dependencies = [
  "chrono",
  "prost",
@@ -1063,8 +1063,8 @@ dependencies = [
 
 [[package]]
 name = "monitor-hub-plugin-testkit"
-version = "0.1.0"
-source = "git+https://github.com/ItzTas/monitor-hub?tag=sdk-rust%2Fv0.1.0#9c22054e29d91488551a73c6b0c3c4d5d6284a8a"
+version = "0.1.1"
+source = "git+https://github.com/ItzTas/monitor-hub?tag=sdk-rust%2Fv0.1.1#6b2eacec2cd00e650194a75bd421b161d25c8449"
 dependencies = [
  "tokio",
  "tokio-postgres",
