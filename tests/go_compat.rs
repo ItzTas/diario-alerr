@@ -102,6 +102,17 @@ async fn go_finished_a_cycle(admin: &tokio_postgres::Client) -> bool {
     row.is_ok_and(|row| row.get::<_, i64>(0) == 2 && row.get::<_, Option<bool>>(1).unwrap_or(false))
 }
 
+async fn delivery_channels(admin: &tokio_postgres::Client, alert_id: &str) -> Vec<String> {
+    admin
+        .query(
+            "SELECT channel FROM alert_deliveries WHERE alert_id = $1 ORDER BY channel",
+            &[&alert_id],
+        )
+        .await
+        .map(|rows| rows.iter().map(|row| row.get(0)).collect())
+        .unwrap_or_default()
+}
+
 async fn applied_versions(admin: &tokio_postgres::Client) -> Vec<(i64, i64)> {
     admin
         .query(
@@ -199,9 +210,11 @@ async fn go_sends_nothing_from_the_rust_era_after_rollback() {
             ("TELEGRAM_API_URL", &telegram_api_url),
         ],
     );
-    wait_for(&mut release, "Telegram receives a message", async || {
-        channels.telegram_count() > 0
-    })
+    wait_for(
+        &mut release,
+        "Go records edition 802 as delivered on ntfy and telegram",
+        async || delivery_channels(&admin, "edition-802").await == ["ntfy", "telegram"],
+    )
     .await;
     let stopped = release.stop();
 
