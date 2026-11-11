@@ -217,15 +217,11 @@ async fn losing_the_database_lock_exits_1() {
     let exited = plugin.exit_within(Duration::from_secs(5));
 
     assert_eq!(exited.status.code(), Some(1), "{}", exited.stderr);
-    let lost: Vec<Value> = error_lines(&exited.stderr)
-        .into_iter()
-        .filter(|line| line["@message"] == "the database lock was lost")
-        .collect();
-    assert_eq!(lost.len(), 1, "{}", exited.stderr);
+    let error = single_error(&exited);
+    assert_eq!(error["@message"], "fatal", "{}", exited.stderr);
+    let text = error["error"].as_str().expect("an error field");
     assert!(
-        lost[0]["reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("terminating connection")),
+        text.starts_with("the database lock was lost: ") && text.contains("terminating connection"),
         "{}",
         exited.stderr
     );
