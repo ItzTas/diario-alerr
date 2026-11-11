@@ -9,7 +9,7 @@ use tracing::{error, info, warn};
 use crate::alerts::{edition_alert, welcome_alert};
 use crate::domain::{Alert, Edition};
 use crate::gazette::GazetteError;
-use crate::store::{EditionRecord, Store, StoreError};
+use crate::store::{EditionRecord, Store, StoreError, chain_text};
 use crate::text::Hits;
 use crate::timestamp::Clock;
 
@@ -232,7 +232,7 @@ fn shown(failure: &(dyn Error + 'static)) -> String {
     if failure.is::<StoreError>() {
         return DATABASE_UNAVAILABLE.to_owned();
     }
-    describe(failure)
+    chain_text(failure)
 }
 
 fn one_line(text: &str) -> String {
@@ -240,20 +240,6 @@ fn one_line(text: &str) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn describe(failure: &(dyn Error + 'static)) -> String {
-    let mut text = failure.to_string();
-    let mut cause = failure.source();
-    while let Some(current) = cause {
-        let shown = current.to_string();
-        if !text.ends_with(&shown) {
-            text.push_str(": ");
-            text.push_str(&shown);
-        }
-        cause = current.source();
-    }
-    text
 }
 
 #[cfg(test)]
@@ -268,8 +254,8 @@ mod tests {
     use tokio_postgres::NoTls;
 
     use super::{
-        CycleOutcome, Gazette, Monitor, MonitorOptions, alert_for, describe, listing_failed,
-        read_failed, record_failed,
+        CycleOutcome, Gazette, Monitor, MonitorOptions, alert_for, listing_failed, read_failed,
+        record_failed,
     };
     use crate::domain::Edition;
     use crate::gazette::GazetteError;
@@ -350,18 +336,6 @@ mod tests {
             .collect();
         assert_eq!(ids, ["edition-1", "edition-2", "edition-3", "edition-4"]);
     }
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("connect")]
-    struct Refused;
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("send request")]
-    struct Opaque(#[source] Refused);
-
-    #[derive(Debug, thiserror::Error)]
-    #[error("download: {0}")]
-    struct Explained(#[source] Opaque);
 
     #[test]
     fn problems_and_matches_are_logged_with_fields() {
@@ -445,16 +419,6 @@ mod tests {
         assert_eq!(
             record_failed(&edition, &StoreError::Timeout("waiting")),
             "could not record edition ED 1: the database is unavailable"
-        );
-    }
-
-    #[test]
-    fn describe_shows_each_cause_once() {
-        assert_eq!(describe(&Refused), "connect");
-        assert_eq!(describe(&Opaque(Refused)), "send request: connect");
-        assert_eq!(
-            describe(&Explained(Opaque(Refused))),
-            "download: send request: connect"
         );
     }
 }
