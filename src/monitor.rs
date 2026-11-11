@@ -167,13 +167,19 @@ impl<G: Gazette> Monitor<G> {
 
     async fn mark_success(&self) {
         if let Err(failure) = self.store.mark_success(self.now()).await {
-            error!(error = %describe(&failure), "could not record the successful check");
+            error!(
+                error = &failure as &dyn Error,
+                "could not record the successful check"
+            );
         }
     }
 
     async fn prune(&self) {
         if let Err(failure) = self.store.prune(self.keep_seen, self.keep_alerts).await {
-            error!(error = %describe(&failure), "could not prune old editions and alerts");
+            error!(
+                error = &failure as &dyn Error,
+                "could not prune old editions and alerts"
+            );
         }
     }
 }
@@ -183,34 +189,41 @@ fn alert_for(edition: &Edition, hits: Option<Hits>) -> Option<Alert> {
         info!(edition = %edition.title, "no match");
         return None;
     };
-    info!(edition = %edition.title, pages = ?hits.pages, "MATCH");
+    info!(edition = %edition.title, pages = ?pages_in_term_order(&hits), "MATCH");
     Some(edition_alert(edition, &hits))
 }
 
+fn pages_in_term_order(hits: &Hits) -> Vec<(&str, &[usize])> {
+    hits.order
+        .iter()
+        .map(|term| {
+            let pages = hits.pages.get(term).map_or(&[][..], Vec::as_slice);
+            (term.as_str(), pages)
+        })
+        .collect()
+}
+
 fn listing_failed(failure: &(dyn Error + 'static)) -> String {
-    let problem = format!("could not list editions: {}", describe(failure));
-    warn!("{problem}");
-    problem
+    warn!(error = failure, "could not list editions");
+    format!("could not list editions: {}", describe(failure))
 }
 
 fn read_failed(edition: &Edition, failure: &GazetteError) -> String {
-    let problem = format!(
+    warn!(edition = %edition.title, error = failure as &dyn Error, "could not read edition");
+    format!(
         "could not read edition {}: {}",
         edition.title,
         describe(failure)
-    );
-    warn!("{problem}");
-    problem
+    )
 }
 
 fn record_failed(edition: &Edition, failure: &StoreError) -> String {
-    let problem = format!(
+    error!(edition = %edition.title, error = failure as &dyn Error, "could not record edition");
+    format!(
         "could not record edition {}: {}",
         edition.title,
         describe(failure)
-    );
-    error!("{problem}");
-    problem
+    )
 }
 
 fn describe(failure: &(dyn Error + 'static)) -> String {
@@ -230,18 +243,26 @@ fn describe(failure: &(dyn Error + 'static)) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::error::Error;
+    use std::fmt::Debug;
+    use std::sync::{Arc, Mutex, PoisonError};
     use std::time::Duration;
 
     use chrono::{DateTime, Utc};
     use monitor_hub_plugin::migrate::up;
     use monitor_hub_plugin_testkit::database;
     use tokio_postgres::NoTls;
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
 
-    use super::{CycleOutcome, Gazette, Monitor, MonitorOptions, describe};
+    use super::{
+        CycleOutcome, Gazette, Monitor, MonitorOptions, alert_for, describe, listing_failed,
+        read_failed, record_failed,
+    };
     use crate::domain::Edition;
     use crate::gazette::GazetteError;
-    use crate::store::{MIGRATIONS, Store};
+    use crate::store::{MIGRATIONS, Store, StoreError};
     use crate::text::Hits;
 
     struct EveryEditionMatches(Vec<Edition>);
@@ -329,6 +350,124 @@ mod tests {
     #[derive(Debug, thiserror::Error)]
     #[error("download: {0}")]
     struct Explained(#[source] Opaque);
+
+    type LoggedEvent = Vec<(String, String)>;
+
+    struct Capture(Arc<Mutex<Vec<LoggedEvent>>>);
+
+    #[derive(Default)]
+    struct Fields(LoggedEvent);
+
+    impl Visit for Fields {
+        fn record_debug(&mut self, field: &Field, value: &dyn Debug) {
+            self.0.push((field.name().to_owned(), format!("{value:?}")));
+        }
+
+        fn record_error(&mut self, field: &Field, value: &(dyn Error + 'static)) {
+            self.0
+                .push((field.name().to_owned(), format!("error field: {value}")));
+        }
+    }
+
+    impl Subscriber for Capture {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            let mut fields = Fields::default();
+            event.record(&mut fields);
+            fields
+                .0
+                .push(("level".to_owned(), event.metadata().level().to_string()));
+            fields.0.sort();
+            self.0
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(fields.0);
+        }
+
+        fn enter(&self, _: &Id) {}
+
+        fn exit(&self, _: &Id) {}
+    }
+
+    fn captured(work: impl FnOnce()) -> Vec<LoggedEvent> {
+        let events = Arc::default();
+        tracing::subscriber::with_default(Capture(Arc::clone(&events)), work);
+        let events = events.lock().unwrap_or_else(PoisonError::into_inner);
+        events.clone()
+    }
+
+    fn logged(fields: &[(&str, &str)]) -> LoggedEvent {
+        fields
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn problems_and_matches_are_logged_with_fields() {
+        let edition = Edition {
+            id: 1,
+            published: utc("2026-11-06T20:00:00Z"),
+            url: "https://x/1.pdf".to_owned(),
+            title: "ED 1".to_owned(),
+        };
+        let hits = Hits {
+            pages: HashMap::from([("B".to_owned(), vec![2]), ("A".to_owned(), vec![1, 3])]),
+            order: vec!["B".to_owned(), "A".to_owned()],
+            first_page: 1,
+            snippet: "S".to_owned(),
+        };
+
+        let events = captured(|| {
+            listing_failed(&GazetteError::TooManyPages { limit: 1 });
+            read_failed(
+                &edition,
+                &GazetteError::Pdftotext("pdf unavailable".to_owned()),
+            );
+            record_failed(&edition, &StoreError::Timeout("waiting"));
+            alert_for(&edition, Some(hits));
+        });
+
+        assert_eq!(
+            events,
+            [
+                logged(&[
+                    ("error", "error field: media list: more than 1 pages"),
+                    ("level", "WARN"),
+                    ("message", "could not list editions"),
+                ]),
+                logged(&[
+                    ("edition", "ED 1"),
+                    ("error", "error field: pdftotext: pdf unavailable"),
+                    ("level", "WARN"),
+                    ("message", "could not read edition"),
+                ]),
+                logged(&[
+                    ("edition", "ED 1"),
+                    ("error", "error field: waiting timed out"),
+                    ("level", "ERROR"),
+                    ("message", "could not record edition"),
+                ]),
+                logged(&[
+                    ("edition", "ED 1"),
+                    ("level", "INFO"),
+                    ("message", "MATCH"),
+                    ("pages", r#"[("B", [2]), ("A", [1, 3])]"#),
+                ]),
+            ]
+        );
+    }
 
     #[test]
     fn describe_shows_each_cause_once() {
