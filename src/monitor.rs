@@ -258,10 +258,11 @@ fn describe(failure: &(dyn Error + 'static)) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
     use std::collections::HashMap;
     use std::error::Error;
     use std::fmt::Debug;
-    use std::sync::{Arc, Mutex, PoisonError};
+    use std::sync::{Arc, Once};
     use std::time::Duration;
 
     use chrono::{DateTime, Utc};
@@ -270,6 +271,7 @@ mod tests {
     use tokio_postgres::NoTls;
     use tracing::field::{Field, Visit};
     use tracing::span::{Attributes, Id, Record};
+    use tracing::subscriber::Interest;
     use tracing::{Event, Metadata, Subscriber};
 
     use super::{
@@ -369,7 +371,11 @@ mod tests {
 
     type LoggedEvent = Vec<(String, String)>;
 
-    struct Capture(Arc<Mutex<Vec<LoggedEvent>>>);
+    thread_local! {
+        static CAPTURED: RefCell<Option<Vec<LoggedEvent>>> = const { RefCell::new(None) };
+    }
+
+    struct CaptureOnMarkedThreads;
 
     #[derive(Default)]
     struct Fields(LoggedEvent);
@@ -385,9 +391,13 @@ mod tests {
         }
     }
 
-    impl Subscriber for Capture {
+    impl Subscriber for CaptureOnMarkedThreads {
+        fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
+            Interest::sometimes()
+        }
+
         fn enabled(&self, _: &Metadata<'_>) -> bool {
-            true
+            CAPTURED.with_borrow(Option::is_some)
         }
 
         fn new_span(&self, _: &Attributes<'_>) -> Id {
@@ -405,10 +415,11 @@ mod tests {
                 .0
                 .push(("level".to_owned(), event.metadata().level().to_string()));
             fields.0.sort();
-            self.0
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(fields.0);
+            CAPTURED.with_borrow_mut(|captured| {
+                if let Some(events) = captured {
+                    events.push(fields.0);
+                }
+            });
         }
 
         fn enter(&self, _: &Id) {}
@@ -417,10 +428,15 @@ mod tests {
     }
 
     fn captured(work: impl FnOnce()) -> Vec<LoggedEvent> {
-        let events = Arc::default();
-        tracing::subscriber::with_default(Capture(Arc::clone(&events)), work);
-        let events = events.lock().unwrap_or_else(PoisonError::into_inner);
-        events.clone()
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| {
+            tracing::subscriber::set_global_default(CaptureOnMarkedThreads)
+                .expect("no other global subscriber in the unit tests");
+        });
+        tracing::callsite::rebuild_interest_cache();
+        CAPTURED.set(Some(Vec::new()));
+        work();
+        CAPTURED.take().unwrap_or_default()
     }
 
     fn logged(fields: &[(&str, &str)]) -> LoggedEvent {
