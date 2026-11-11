@@ -1,0 +1,381 @@
+[
+  {
+    "raw_pages": [
+      "Sumário Mesa Diretora",
+      "Classificação: 0034712k PAULO\nSANTOS 132,61 8",
+      "Nomeação de Paulo Santós para o cargo"
+    ],
+    "terms": [
+      "Paulo Santos",
+      "0034712k",
+      "Fulano"
+    ],
+    "hits": {
+      "pages": {
+        "0034712k": [
+          2
+        ],
+        "Paulo Santos": [
+          2,
+          3
+        ]
+      },
+      "order": [
+        "Paulo Santos",
+        "0034712k"
+      ],
+      "first_page": 2,
+      "snippet": "CLASSIFICACAO: 0034712K PAULO SANTOS 132,61 8"
+    }
+  },
+  {
+    "raw_pages": [
+      "nada aqui"
+    ],
+    "terms": [
+      "Paulo Santos"
+    ],
+    "hits": null
+  },
+  {
+    "raw_pages": [
+      "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX ALFA YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY BETA ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+    ],
+    "terms": [
+      "beta",
+      "alfa"
+    ],
+    "hits": {
+      "pages": {
+        "alfa": [
+          1
+        ],
+        "beta": [
+          1
+        ]
+      },
+      "order": [
+        "beta",
+        "alfa"
+      ],
+      "first_page": 1,
+      "snippet": "YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY BETA ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+    }
+  },
+  {
+    "raw_pages": [
+      "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX ALFA YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY BETA ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+    ],
+    "terms": [
+      "alfa",
+      "beta"
+    ],
+    "hits": {
+      "pages": {
+        "alfa": [
+          1
+        ],
+        "beta": [
+          1
+        ]
+      },
+      "order": [
+        "alfa",
+        "beta"
+      ],
+      "first_page": 1,
+      "snippet": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX ALFA YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY"
+    }
+  },
+  {
+    "raw_pages": [
+      "beta aqui QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+      "alfa aqui WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW"
+    ],
+    "terms": [
+      "alfa",
+      "beta"
+    ],
+    "hits": {
+      "pages": {
+        "alfa": [
+          2
+        ],
+        "beta": [
+          1
+        ]
+      },
+      "order": [
+        "alfa",
+        "beta"
+      ],
+      "first_page": 1,
+      "snippet": "BETA AQUI QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
+    }
+  },
+  {
+    "raw_pages": [
+      "um",
+      "dois alfa",
+      "tres alfa"
+    ],
+    "terms": [
+      "alfa",
+      "alfa"
+    ],
+    "hits": {
+      "pages": {
+        "alfa": [
+          2,
+          3,
+          2,
+          3
+        ]
+      },
+      "order": [
+        "alfa",
+        "alfa"
+      ],
+      "first_page": 2,
+      "snippet": "DOIS ALFA"
+    }
+  },
+  {
+    "raw_pages": [
+      "um",
+      "dois"
+    ],
+    "terms": [
+      "   ",
+      "alfa"
+    ],
+    "hits": {
+      "pages": {
+        "   ": [
+          1,
+          2
+        ]
+      },
+      "order": [
+        "   "
+      ],
+      "first_page": 1,
+      "snippet": "UM"
+    }
+  },
+  {
+    "raw_pages": [
+      "Nomeação de José"
+    ],
+    "terms": [
+      "José",
+      "Jose",
+      "JOSÉ"
+    ],
+    "hits": {
+      "pages": {
+        "JOSÉ": [
+          1
+        ],
+        "Jose": [
+          1
+        ],
+        "José": [
+          1
+        ]
+      },
+      "order": [
+        "José",
+        "Jose",
+        "JOSÉ"
+      ],
+      "first_page": 1,
+      "snippet": "NOMEACAO DE JOSE"
+    }
+  },
+  {
+    "raw_pages": [
+      "Rua Straße 10",
+      "STRASSE"
+    ],
+    "terms": [
+      "straße",
+      "STRASSE"
+    ],
+    "hits": {
+      "pages": {
+        "STRASSE": [
+          2
+        ],
+        "straße": [
+          1
+        ]
+      },
+      "order": [
+        "straße",
+        "STRASSE"
+      ],
+      "first_page": 1,
+      "snippet": "RUA STRAßE 10"
+    }
+  },
+  {
+    "raw_pages": [
+      "Rua Straße 10"
+    ],
+    "terms": [
+      "straße"
+    ],
+    "hits": {
+      "pages": {
+        "straße": [
+          1
+        ]
+      },
+      "order": [
+        "straße"
+      ],
+      "first_page": 1,
+      "snippet": "RUA STRAßE 10"
+    }
+  },
+  {
+    "raw_pages": [
+      "STRASSE"
+    ],
+    "terms": [
+      "straße"
+    ],
+    "hits": null
+  },
+  {
+    "raw_pages": [
+      "Paulo Santos aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "terms": [
+      "paulo santos"
+    ],
+    "hits": {
+      "pages": {
+        "paulo santos": [
+          1
+        ]
+      },
+      "order": [
+        "paulo santos"
+      ],
+      "first_page": 1,
+      "snippet": "PAULO SANTOS AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  },
+  {
+    "raw_pages": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa Paulo Santos"
+    ],
+    "terms": [
+      "paulo santos"
+    ],
+    "hits": {
+      "pages": {
+        "paulo santos": [
+          1
+        ]
+      },
+      "order": [
+        "paulo santos"
+      ],
+      "first_page": 1,
+      "snippet": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA PAULO SANTOS"
+    }
+  },
+  {
+    "raw_pages": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa Paulo Santos bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "terms": [
+      "paulo santos"
+    ],
+    "hits": {
+      "pages": {
+        "paulo santos": [
+          1
+        ]
+      },
+      "order": [
+        "paulo santos"
+      ],
+      "first_page": 1,
+      "snippet": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA PAULO SANTOS BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    }
+  },
+  {
+    "raw_pages": [
+      "ºººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººººº PAULO SANTOS ––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––"
+    ],
+    "terms": [
+      "paulo santos"
+    ],
+    "hits": {
+      "pages": {
+        "paulo santos": [
+          1
+        ]
+      },
+      "order": [
+        "paulo santos"
+      ],
+      "first_page": 1,
+      "snippet": "OOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOOO PAULO SANTOS –––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––"
+    }
+  },
+  {
+    "raw_pages": [
+      "Capa",
+      "Nomeação de Paulo Santos",
+      ""
+    ],
+    "terms": [
+      "Paulo Santos"
+    ],
+    "hits": {
+      "pages": {
+        "Paulo Santos": [
+          2
+        ]
+      },
+      "order": [
+        "Paulo Santos"
+      ],
+      "first_page": 2,
+      "snippet": "NOMEACAO DE PAULO SANTOS"
+    }
+  },
+  {
+    "raw_pages": [
+      "Capa",
+      "",
+      "Paulo",
+      ""
+    ],
+    "terms": [
+      "Paulo",
+      "Capa"
+    ],
+    "hits": {
+      "pages": {
+        "Capa": [
+          1
+        ],
+        "Paulo": [
+          3
+        ]
+      },
+      "order": [
+        "Paulo",
+        "Capa"
+      ],
+      "first_page": 1,
+      "snippet": "CAPA"
+    }
+  }
+]

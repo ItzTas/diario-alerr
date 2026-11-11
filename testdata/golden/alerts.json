@@ -1,0 +1,237 @@
+{
+  "welcome": [
+    {
+      "terms": [
+        "PAULO SANTOS",
+        "0034712k"
+      ],
+      "interval_minutes": "30",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: PAULO SANTOS, 0034712k\nChecking every 30 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "PAULO SANTOS",
+        "0034712k"
+      ],
+      "interval_minutes": "0.5",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: PAULO SANTOS, 0034712k\nChecking every 0 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "PAULO SANTOS",
+        "0034712k"
+      ],
+      "interval_minutes": "1.5",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: PAULO SANTOS, 0034712k\nChecking every 2 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "PAULO SANTOS",
+        "0034712k"
+      ],
+      "interval_minutes": "2.5",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: PAULO SANTOS, 0034712k\nChecking every 2 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "PAULO SANTOS",
+        "0034712k"
+      ],
+      "interval_minutes": "0.25",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: PAULO SANTOS, 0034712k\nChecking every 0 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "PAULO SANTOS",
+        "0034712k"
+      ],
+      "interval_minutes": "7.5",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: PAULO SANTOS, 0034712k\nChecking every 8 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "PAULO SANTOS",
+        "0034712k"
+      ],
+      "interval_minutes": "90",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: PAULO SANTOS, 0034712k\nChecking every 90 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "PAULO SANTOS",
+        "0034712k"
+      ],
+      "interval_minutes": "1440",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: PAULO SANTOS, 0034712k\nChecking every 1440 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    }
+  ],
+  "edition": [
+    {
+      "edition": {
+        "id": 42,
+        "published": "2026-11-06T20:23:18Z",
+        "url": "https://x/ed.pdf",
+        "title": "DIARIO-ALE-RR-ED.-4763"
+      },
+      "raw_pages": [
+        "Sumário Mesa Diretora",
+        "Classificação: 0034712k PAULO\nSANTOS 132,61 8",
+        "Nomeação de Paulo Santós para o cargo"
+      ],
+      "terms": [
+        "Paulo Santos",
+        "0034712k",
+        "Fulano"
+      ],
+      "alert": {
+        "id": "edition-42",
+        "title": "Your name appeared in the ALE/RR Official Gazette: DIARIO-ALE-RR-ED.-4763",
+        "link": "https://x/ed.pdf#page=2",
+        "body": "Paulo Santos: pp. 2, 3\n0034712k: p. 2\n\n…CLASSIFICACAO: 0034712K PAULO SANTOS 132,61 8…",
+        "published": "2026-11-06T20:23:18Z"
+      }
+    },
+    {
+      "edition": {
+        "id": 7,
+        "published": "2026-11-06T20:23:18.5Z",
+        "url": "https://x/7.pdf",
+        "title": "DIARIO-ALE-RR-ED.-4700"
+      },
+      "raw_pages": [
+        "nada aqui",
+        "Nomeação de Paulo Santós",
+        "fim"
+      ],
+      "terms": [
+        "paulo santos"
+      ],
+      "alert": {
+        "id": "edition-7",
+        "title": "Your name appeared in the ALE/RR Official Gazette: DIARIO-ALE-RR-ED.-4700",
+        "link": "https://x/7.pdf#page=2",
+        "body": "paulo santos: p. 2\n\n…NOMEACAO DE PAULO SANTOS…",
+        "published": "2026-11-06T20:23:18.5Z"
+      }
+    },
+    {
+      "edition": {
+        "id": 8,
+        "published": "2026-11-06T20:23:18Z",
+        "url": "https://x/8.pdf?ver=2",
+        "title": "DIARIO-ALE-RR-ED.-4701"
+      },
+      "raw_pages": [
+        "PAULO SANTOS",
+        "x",
+        "paulo santos e 0034712K",
+        "0034712k"
+      ],
+      "terms": [
+        "Paulo Santos",
+        "0034712k"
+      ],
+      "alert": {
+        "id": "edition-8",
+        "title": "Your name appeared in the ALE/RR Official Gazette: DIARIO-ALE-RR-ED.-4701",
+        "link": "https://x/8.pdf?ver=2#page=1",
+        "body": "Paulo Santos: pp. 1, 3\n0034712k: pp. 3, 4\n\n…PAULO SANTOS…",
+        "published": "2026-11-06T20:23:18Z"
+      }
+    },
+    {
+      "edition": {
+        "id": 9,
+        "published": "2026-11-06T20:23:18Z",
+        "url": "https://x/9.pdf",
+        "title": "Edição – Extra"
+      },
+      "raw_pages": [
+        "Portaria de José da Conceição"
+      ],
+      "terms": [
+        "josé da conceição"
+      ],
+      "alert": {
+        "id": "edition-9",
+        "title": "Your name appeared in the ALE/RR Official Gazette: Edição – Extra",
+        "link": "https://x/9.pdf#page=1",
+        "body": "josé da conceição: p. 1\n\n…PORTARIA DE JOSE DA CONCEICAO…",
+        "published": "2026-11-06T20:23:18Z"
+      }
+    },
+    {
+      "edition": {
+        "id": 10,
+        "published": "2026-11-06T20:23:18Z",
+        "url": "https://x/10.pdf",
+        "title": "DIARIO-ALE-RR-ED.-4702"
+      },
+      "raw_pages": [
+        "nada",
+        "aqui"
+      ],
+      "terms": [
+        "Paulo Santos",
+        "0034712k"
+      ],
+      "alert": null
+    }
+  ]
+}
