@@ -358,6 +358,7 @@ dependencies = [
 name = "diario-alerr"
 version = "2.0.0"
 dependencies = [
+ "anyhow",
  "axum",
  "chrono",
  "deadpool-postgres",
@@ -365,6 +366,7 @@ dependencies = [
  "htmlize",
  "monitor-hub-plugin",
  "monitor-hub-plugin-testkit",
+ "prost-types",
  "reqwest",
  "serde",
  "serde_json",
@@ -372,6 +374,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-postgres",
+ "tonic",
  "tracing",
  "unicode-normalization",
  "unicode-properties",

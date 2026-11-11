@@ -224,12 +224,11 @@ async fn a_failed_record_stops_recording() {
 
     let outcome = monitor.run_cycle().await;
 
-    let CycleOutcome::Incomplete(problem) = outcome else {
-        panic!("the cycle completed");
-    };
-    assert!(
-        problem.starts_with("could not record edition ED \0 2: "),
-        "{problem:?}"
+    assert_eq!(
+        outcome,
+        CycleOutcome::Incomplete(
+            "could not record edition ED \0 2: the database is unavailable".to_owned()
+        )
     );
     assert_eq!(fake.scans(), 3);
     assert_eq!(seen(&monitor, &[1, 2, 3]).await, [1]);

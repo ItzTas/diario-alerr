@@ -18,6 +18,8 @@ const SCAN_WORKERS: usize = 2;
 const MAX_SEEN: i64 = 1000;
 const MAX_ALERTS: i64 = 100;
 
+pub(crate) const DATABASE_UNAVAILABLE: &str = "the database is unavailable";
+
 type ScanResult = Result<Option<Hits>, GazetteError>;
 
 pub trait Gazette: Send + Sync + 'static {
@@ -205,25 +207,39 @@ fn pages_in_term_order(hits: &Hits) -> Vec<(&str, &[usize])> {
 
 fn listing_failed(failure: &(dyn Error + 'static)) -> String {
     warn!(error = failure, "could not list editions");
-    format!("could not list editions: {}", describe(failure))
+    one_line(&format!("could not list editions: {}", shown(failure)))
 }
 
 fn read_failed(edition: &Edition, failure: &GazetteError) -> String {
     warn!(edition = %edition.title, error = failure as &dyn Error, "could not read edition");
-    format!(
+    one_line(&format!(
         "could not read edition {}: {}",
         edition.title,
-        describe(failure)
-    )
+        shown(failure)
+    ))
 }
 
 fn record_failed(edition: &Edition, failure: &StoreError) -> String {
     error!(edition = %edition.title, error = failure as &dyn Error, "could not record edition");
-    format!(
+    one_line(&format!(
         "could not record edition {}: {}",
         edition.title,
-        describe(failure)
-    )
+        shown(failure)
+    ))
+}
+
+fn shown(failure: &(dyn Error + 'static)) -> String {
+    if failure.is::<StoreError>() {
+        return DATABASE_UNAVAILABLE.to_owned();
+    }
+    describe(failure)
+}
+
+fn one_line(text: &str) -> String {
+    text.split(['\r', '\n'])
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn describe(failure: &(dyn Error + 'static)) -> String {
@@ -466,6 +482,36 @@ mod tests {
                     ("pages", r#"[("B", [2]), ("A", [1, 3])]"#),
                 ]),
             ]
+        );
+    }
+
+    #[test]
+    fn problem_texts_hide_database_errors_and_fit_on_one_line() {
+        let edition = Edition {
+            id: 1,
+            published: utc("2026-11-06T20:00:00Z"),
+            url: "https://x/1.pdf".to_owned(),
+            title: "ED\n1".to_owned(),
+        };
+
+        assert_eq!(
+            listing_failed(&StoreError::NotInitialized),
+            "could not list editions: the database is unavailable"
+        );
+        assert_eq!(
+            listing_failed(&GazetteError::TooManyPages { limit: 1 }),
+            "could not list editions: media list: more than 1 pages"
+        );
+        assert_eq!(
+            read_failed(
+                &edition,
+                &GazetteError::Pdftotext("bad font\r\n\nat page 2".to_owned())
+            ),
+            "could not read edition ED 1: pdftotext: bad font at page 2"
+        );
+        assert_eq!(
+            record_failed(&edition, &StoreError::Timeout("waiting")),
+            "could not record edition ED 1: the database is unavailable"
         );
     }
 
