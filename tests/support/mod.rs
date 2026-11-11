@@ -1,12 +1,16 @@
 #![allow(dead_code)]
 
+pub mod fake_gazette;
 pub mod gazette_site;
 pub mod pdf;
 
 use std::env;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use diario_alerr::store::MIGRATIONS;
+use diario_alerr::timestamp::Clock;
 use monitor_hub_plugin::migrate::up;
 use monitor_hub_plugin_testkit::{Database, database};
 use tokio_postgres::NoTls;
@@ -43,4 +47,14 @@ pub fn require_pdftotext() -> bool {
     }
     eprintln!("skipping: pdftotext is not installed");
     false
+}
+
+pub fn utc(raw: &str) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(raw)
+        .unwrap_or_else(|_| panic!("bad timestamp {raw:?}"))
+        .to_utc()
+}
+
+pub fn fixed_clock(at: DateTime<Utc>) -> Clock {
+    Arc::new(move || at)
 }
