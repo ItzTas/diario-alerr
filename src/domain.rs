@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 
 pub const WELCOME_ALERT_ID: &str = "welcome";
-pub const SITE_URL: &str = "https://diarios.al.rr.leg.br";
+pub(crate) const SITE_URL: &str = "https://diarios.al.rr.leg.br";
 pub const GAZETTE_NAME: &str = "ALE/RR Official Gazette";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
