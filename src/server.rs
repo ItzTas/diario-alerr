@@ -215,19 +215,20 @@ fn timestamp(at: DateTime<Utc>) -> Timestamp {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use chrono::DateTime;
     use monitor_hub_plugin::migrate::up;
-    use monitor_hub_plugin::proto::EventsRequest;
     use monitor_hub_plugin::proto::plugin_server::Plugin;
+    use monitor_hub_plugin::proto::{EventsRequest, State, StatusRequest};
     use monitor_hub_plugin_testkit::database;
     use serde_json::{Value, json};
+    use tokio::net::TcpListener;
     use tokio::runtime::{Builder, Runtime};
     use tokio_postgres::NoTls;
     use tonic::Request;
 
-    use super::{DiarioPlugin, HUB_AHEAD};
+    use super::{DiarioPlugin, HUB_AHEAD, STATUS_QUERY_LIMIT};
     use crate::gazette::{Client, HTTP_TIMEOUT};
     use crate::logtest::{captured, logged};
     use crate::monitor::{Monitor, MonitorOptions};
@@ -298,6 +299,41 @@ mod tests {
                 ("message", HUB_AHEAD),
             ])]
         );
+    }
+
+    #[tokio::test]
+    async fn status_answers_within_its_limit_when_the_database_is_silent() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        let silent = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let mut plugin = plugin(&format!("postgres://diario:hunter2@{address}/diario"));
+        assert_eq!(plugin.status_query_limit, STATUS_QUERY_LIMIT);
+        assert_eq!(STATUS_QUERY_LIMIT, Duration::from_secs(10));
+        let limit = Duration::from_millis(300);
+        plugin.status_query_limit = limit;
+
+        let started = Instant::now();
+        let answered = tokio::time::timeout(
+            Duration::from_secs(3),
+            plugin.status(Request::new(StatusRequest {})),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        silent.abort();
+
+        let status = answered
+            .expect("Status answered before the watchdog")
+            .expect("status")
+            .into_inner();
+        assert!(elapsed < limit + Duration::from_secs(1), "took {elapsed:?}");
+        assert_eq!(status.state, i32::from(State::Failing));
+        assert_eq!(status.message, "the database is unavailable");
+        assert_eq!(status.last_success_at, None);
     }
 
     #[test]
