@@ -31,6 +31,7 @@ const HUB_AHEAD: &str =
 pub struct DiarioPlugin<G> {
     scheduler: Arc<Scheduler<G>>,
     hub_ahead_reported: AtomicBool,
+    status_query_limit: Duration,
 }
 
 impl<G: Gazette> DiarioPlugin<G> {
@@ -38,6 +39,7 @@ impl<G: Gazette> DiarioPlugin<G> {
         DiarioPlugin {
             scheduler,
             hub_ahead_reported: AtomicBool::new(false),
+            status_query_limit: STATUS_QUERY_LIMIT,
         }
     }
 
@@ -62,9 +64,10 @@ impl<G: Gazette> DiarioPlugin<G> {
 
     async fn last_success(&self) -> Option<Option<DateTime<Utc>>> {
         let store = self.scheduler.monitor().store();
-        let read = tokio::time::timeout(STATUS_QUERY_LIMIT, store.last_success()).await;
+        let limit = self.status_query_limit;
+        let read = tokio::time::timeout(limit, store.last_success()).await;
         let Ok(read) = read else {
-            warn!("reading the last success took longer than {STATUS_QUERY_LIMIT:?}");
+            warn!("reading the last success took longer than {limit:?}");
             return None;
         };
         read.inspect_err(|failure| {
