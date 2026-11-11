@@ -4,7 +4,6 @@ pub mod channels;
 pub mod fake_gazette;
 pub mod gazette_site;
 pub mod go;
-pub mod grpc;
 pub mod pdf;
 pub mod process;
 
