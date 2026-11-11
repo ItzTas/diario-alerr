@@ -262,6 +262,23 @@ fn query_escape(text: &str) -> String {
     escaped
 }
 
+impl crate::monitor::Gazette for Client {
+    fn list_editions(
+        &self,
+        after: DateTime<Utc>,
+    ) -> impl Future<Output = Result<Vec<Edition>, GazetteError>> + Send {
+        Client::list_editions(self, after)
+    }
+
+    fn scan(
+        &self,
+        edition: &Edition,
+        terms: &[String],
+    ) -> impl Future<Output = Result<Option<Hits>, GazetteError>> + Send {
+        Client::scan(self, edition, terms)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;

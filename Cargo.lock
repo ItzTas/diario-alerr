@@ -372,6 +372,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-postgres",
+ "tracing",
  "unicode-normalization",
  "unicode-properties",
  "webpki-root-certs",
