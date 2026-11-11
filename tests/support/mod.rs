@@ -3,6 +3,7 @@
 pub mod fake_gazette;
 pub mod gazette_site;
 pub mod pdf;
+pub mod process;
 
 use std::env;
 use std::process::{Command, Stdio};

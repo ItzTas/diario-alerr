@@ -1,0 +1,1 @@
+{ "protocol_version": 1, "name": "diario", "command": ["diario-alerr", "plugin"], "apk": ["poppler-utils"] }
