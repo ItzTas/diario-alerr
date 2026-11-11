@@ -13,11 +13,12 @@ use support::gazette_site::GazetteSite;
 use support::process::{
     COOKIE, Exited, error_lines, require_sh, run_plugin, spawn_plugin, terminate,
 };
-use support::{eventually, migrated_database, utc};
+use support::{eventually, migrated_database, require_pdftotext, utc};
 
 const EXIT_LIMIT: Duration = Duration::from_secs(30);
 const STOP_LIMIT: Duration = Duration::from_secs(2);
 const UNREACHABLE_GAZETTE: &str = "http://127.0.0.1:9/media";
+const UNREACHABLE_DATABASE: &str = "postgres://diario:hunter2@127.0.0.1:1/diario";
 
 async fn connect(url: &str) -> Client {
     let (client, connection) = tokio_postgres::connect(url, NoTls).await.expect("connect");
@@ -92,8 +93,38 @@ fn config_error_exits_before_the_handshake() {
     );
 }
 
+#[test]
+fn a_missing_pdftotext_stops_the_start_up() {
+    let empty = tempfile::tempdir().expect("an empty PATH directory");
+
+    let exited = run_plugin(
+        &["plugin"],
+        &[
+            COOKIE,
+            ("DATABASE_URL", UNREACHABLE_DATABASE),
+            ("WATCH_TERMS", "TALES SABINI"),
+            ("PATH", path_text(&empty)),
+        ],
+        EXIT_LIMIT,
+    );
+
+    assert_refused_before_the_handshake(&exited);
+    let error = single_error(&exited);
+    assert_eq!(error["@message"], "fatal", "{}", exited.stderr);
+    let text = error["error"].as_str().expect("an error field");
+    assert!(
+        text.starts_with("checking pdftotext: "),
+        "{}",
+        exited.stderr
+    );
+    assert!(!exited.stderr.contains("hunter2"), "{}", exited.stderr);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn second_process_refuses_to_start() {
+    if !require_pdftotext() {
+        return;
+    }
     let Some(db) = migrated_database().await else {
         return;
     };
@@ -128,7 +159,7 @@ async fn second_process_refuses_to_start() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sigterm_during_a_cycle_exits_within_two_seconds() {
-    if !require_sh() {
+    if !require_sh() || !require_pdftotext() {
         return;
     }
     let Some(db) = migrated_database().await else {
@@ -185,6 +216,9 @@ async fn sigterm_during_a_cycle_exits_within_two_seconds() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn losing_the_database_lock_exits_1() {
+    if !require_pdftotext() {
+        return;
+    }
     let Some(db) = migrated_database().await else {
         return;
     };

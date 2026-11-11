@@ -16,6 +16,34 @@ const MAX_PDF_BYTES: usize = 256 << 20;
 const MAX_TEXT_BYTES: usize = 64 << 20;
 const STDERR_LIMIT: usize = 32 << 10;
 const EXCERPT_CHARS: usize = 200;
+const VERSION_CHECK_LIMIT: Duration = Duration::from_secs(5);
+
+pub(crate) async fn check_pdftotext() -> io::Result<()> {
+    let mut command = Command::new("pdftotext");
+    command.arg("-v");
+    answers(command, VERSION_CHECK_LIMIT).await
+}
+
+async fn answers(mut command: Command, limit: Duration) -> io::Result<()> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let Ok(status) = tokio::time::timeout(limit, child.wait()).await else {
+        child.kill().await?;
+        return Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("timed out after {limit:?}"),
+        ));
+    };
+    let status = status?;
+    if !status.success() {
+        return Err(io::Error::other(describe(status)));
+    }
+    Ok(())
+}
 
 pub(crate) async fn download_pages(
     http: &reqwest::Client,
@@ -274,7 +302,7 @@ fn stderr_excerpt(stderr: &[u8], path: &Path) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::fs;
     use std::os::unix::process::ExitStatusExt;
     use std::path::Path;
@@ -286,7 +314,7 @@ mod tests {
     use tokio::net::{TcpListener, TcpStream};
     use tokio::process::Command;
 
-    use super::{MAX_PDF_BYTES, MAX_TEXT_BYTES, download_pages_in, failure, run};
+    use super::{MAX_PDF_BYTES, MAX_TEXT_BYTES, answers, download_pages_in, failure, run};
     use crate::gazette::GazetteError;
 
     const FAKE_PDF: &[u8] = include_bytes!(concat!(
@@ -294,7 +322,7 @@ mod tests {
         "/testdata/golden/fake.pdf"
     ));
 
-    fn pdftotext_available() -> bool {
+    pub(crate) fn pdftotext_available() -> bool {
         let installed = std::process::Command::new("pdftotext")
             .arg("-v")
             .stdout(Stdio::null())
@@ -543,6 +571,24 @@ mod tests {
                 .starts_with(r#"pdftotext: exec: "diario-alerr-missing-pdftotext": "#),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_version_check_names_the_exit_or_the_time_limit() {
+        let exits = Command::new("false");
+        let mut hangs = Command::new("sleep");
+        hangs.arg("30");
+
+        let exited = answers(exits, Duration::from_secs(5)).await.unwrap_err();
+        let started = std::time::Instant::now();
+        let stalled = answers(hangs, Duration::from_millis(200))
+            .await
+            .unwrap_err();
+
+        assert_eq!(exited.to_string(), "exit status 1");
+        assert_eq!(stalled.kind(), std::io::ErrorKind::TimedOut);
+        assert_eq!(stalled.to_string(), "timed out after 200ms");
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[tokio::test]

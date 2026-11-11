@@ -12,7 +12,7 @@ use monitor_hub_plugin_testkit::conformance::{Conformance, Outcome, run};
 use tempfile::TempDir;
 
 use support::gazette_site::GazetteSite;
-use support::{fixed_clock, migrated_database, utc};
+use support::{fixed_clock, migrated_database, require_pdftotext, utc};
 
 const TERMS: &str = "TALES SABINI";
 
@@ -75,6 +75,9 @@ fn plugin_conformance(url: &str, api_url: &str, sockets: &TempDir, data: &TempDi
 
 #[tokio::test(flavor = "multi_thread")]
 async fn plugin_passes_the_hub_conformance_suite() {
+    if !require_pdftotext() {
+        return;
+    }
     let Some(db) = migrated_database().await else {
         return;
     };

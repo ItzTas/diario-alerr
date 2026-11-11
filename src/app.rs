@@ -11,9 +11,10 @@ use tracing::info;
 use crate::config::Config;
 use crate::gazette::{Client, HTTP_TIMEOUT};
 use crate::monitor::{Monitor, MonitorOptions};
+use crate::pdf::check_pdftotext;
 use crate::scheduler::Scheduler;
 use crate::server::DiarioPlugin;
-use crate::store::{Store, StoreError, WriterLock, acquire_writer_lock};
+use crate::store::{Store, WriterLock, acquire_writer_lock};
 use crate::timestamp::system_clock;
 
 const START_UP_LIMIT: Duration = Duration::from_secs(45);
@@ -30,6 +31,7 @@ async fn start_up(
     limit: Duration,
 ) -> anyhow::Result<(WriterLock, Monitor<Client>)> {
     let deadline = Instant::now() + limit;
+    within(deadline, limit, "checking pdftotext", check_pdftotext()).await?;
     let mut lock = within(
         deadline,
         limit,
@@ -59,12 +61,15 @@ async fn start_up(
     Ok((lock, monitor))
 }
 
-async fn within<T>(
+async fn within<T, E>(
     deadline: Instant,
     limit: Duration,
     step: &'static str,
-    work: impl Future<Output = Result<T, StoreError>>,
-) -> anyhow::Result<T> {
+    work: impl Future<Output = Result<T, E>>,
+) -> anyhow::Result<T>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
     let Ok(finished) = timeout_at(deadline, work).await else {
         return Err(anyhow!("the start-up limit of {limit:?} ran out").context(step));
     };
@@ -107,10 +112,14 @@ mod tests {
 
     use super::start_up;
     use crate::config::Config;
+    use crate::pdf::tests::pdftotext_available;
     use crate::timestamp::parse_rfc3339;
 
     #[tokio::test]
     async fn start_up_stops_at_its_limit_and_names_the_step() {
+        if !pdftotext_available() {
+            return;
+        }
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let address = listener.local_addr().expect("address");
         let silent = tokio::spawn(async move {
