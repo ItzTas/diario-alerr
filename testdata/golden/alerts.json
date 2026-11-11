@@ -1,0 +1,237 @@
+{
+  "welcome": [
+    {
+      "terms": [
+        "TALES SABINI",
+        "0021805e"
+      ],
+      "interval_minutes": "30",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: TALES SABINI, 0021805e\nChecking every 30 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "TALES SABINI",
+        "0021805e"
+      ],
+      "interval_minutes": "0.5",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: TALES SABINI, 0021805e\nChecking every 0 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "TALES SABINI",
+        "0021805e"
+      ],
+      "interval_minutes": "1.5",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: TALES SABINI, 0021805e\nChecking every 2 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "TALES SABINI",
+        "0021805e"
+      ],
+      "interval_minutes": "2.5",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: TALES SABINI, 0021805e\nChecking every 2 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "TALES SABINI",
+        "0021805e"
+      ],
+      "interval_minutes": "0.25",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: TALES SABINI, 0021805e\nChecking every 0 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "TALES SABINI",
+        "0021805e"
+      ],
+      "interval_minutes": "7.5",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: TALES SABINI, 0021805e\nChecking every 8 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "TALES SABINI",
+        "0021805e"
+      ],
+      "interval_minutes": "90",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: TALES SABINI, 0021805e\nChecking every 90 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    },
+    {
+      "terms": [
+        "TALES SABINI",
+        "0021805e"
+      ],
+      "interval_minutes": "1440",
+      "now": "2026-11-09T14:00:00Z",
+      "alert": {
+        "id": "welcome",
+        "title": "ALE/RR Official Gazette monitor started",
+        "link": "https://diarios.al.rr.leg.br",
+        "body": "Watching: TALES SABINI, 0021805e\nChecking every 1440 min.",
+        "published": "2026-11-09T14:00:00Z"
+      }
+    }
+  ],
+  "edition": [
+    {
+      "edition": {
+        "id": 42,
+        "published": "2026-11-06T20:23:18Z",
+        "url": "https://x/ed.pdf",
+        "title": "DIARIO-ALE-RR-ED.-4763"
+      },
+      "raw_pages": [
+        "Sumário Mesa Diretora",
+        "Classificação: 0021805e TALES\nSABINI 132,61 8",
+        "Nomeação de Tales Sabíni para o cargo"
+      ],
+      "terms": [
+        "Tales Sabini",
+        "0021805e",
+        "Fulano"
+      ],
+      "alert": {
+        "id": "edition-42",
+        "title": "Your name appeared in the ALE/RR Official Gazette: DIARIO-ALE-RR-ED.-4763",
+        "link": "https://x/ed.pdf#page=2",
+        "body": "Tales Sabini: pp. 2, 3\n0021805e: p. 2\n\n…CLASSIFICACAO: 0021805E TALES SABINI 132,61 8…",
+        "published": "2026-11-06T20:23:18Z"
+      }
+    },
+    {
+      "edition": {
+        "id": 7,
+        "published": "2026-11-06T20:23:18.5Z",
+        "url": "https://x/7.pdf",
+        "title": "DIARIO-ALE-RR-ED.-4700"
+      },
+      "raw_pages": [
+        "nada aqui",
+        "Nomeação de Tales Sabíni",
+        "fim"
+      ],
+      "terms": [
+        "tales sabini"
+      ],
+      "alert": {
+        "id": "edition-7",
+        "title": "Your name appeared in the ALE/RR Official Gazette: DIARIO-ALE-RR-ED.-4700",
+        "link": "https://x/7.pdf#page=2",
+        "body": "tales sabini: p. 2\n\n…NOMEACAO DE TALES SABINI…",
+        "published": "2026-11-06T20:23:18.5Z"
+      }
+    },
+    {
+      "edition": {
+        "id": 8,
+        "published": "2026-11-06T20:23:18Z",
+        "url": "https://x/8.pdf?ver=2",
+        "title": "DIARIO-ALE-RR-ED.-4701"
+      },
+      "raw_pages": [
+        "TALES SABINI",
+        "x",
+        "tales sabini e 0021805E",
+        "0021805e"
+      ],
+      "terms": [
+        "Tales Sabini",
+        "0021805e"
+      ],
+      "alert": {
+        "id": "edition-8",
+        "title": "Your name appeared in the ALE/RR Official Gazette: DIARIO-ALE-RR-ED.-4701",
+        "link": "https://x/8.pdf?ver=2#page=1",
+        "body": "Tales Sabini: pp. 1, 3\n0021805e: pp. 3, 4\n\n…TALES SABINI…",
+        "published": "2026-11-06T20:23:18Z"
+      }
+    },
+    {
+      "edition": {
+        "id": 9,
+        "published": "2026-11-06T20:23:18Z",
+        "url": "https://x/9.pdf",
+        "title": "Edição – Extra"
+      },
+      "raw_pages": [
+        "Portaria de José da Conceição"
+      ],
+      "terms": [
+        "josé da conceição"
+      ],
+      "alert": {
+        "id": "edition-9",
+        "title": "Your name appeared in the ALE/RR Official Gazette: Edição – Extra",
+        "link": "https://x/9.pdf#page=1",
+        "body": "josé da conceição: p. 1\n\n…PORTARIA DE JOSE DA CONCEICAO…",
+        "published": "2026-11-06T20:23:18Z"
+      }
+    },
+    {
+      "edition": {
+        "id": 10,
+        "published": "2026-11-06T20:23:18Z",
+        "url": "https://x/10.pdf",
+        "title": "DIARIO-ALE-RR-ED.-4702"
+      },
+      "raw_pages": [
+        "nada",
+        "aqui"
+      ],
+      "terms": [
+        "Tales Sabini",
+        "0021805e"
+      ],
+      "alert": null
+    }
+  ]
+}
