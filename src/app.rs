@@ -11,7 +11,7 @@ use tracing::info;
 use crate::config::Config;
 use crate::gazette::{Client, HTTP_TIMEOUT};
 use crate::monitor::{Monitor, MonitorOptions};
-use crate::pdf::check_pdftotext;
+use crate::pdf::{check_pdftotext, remove_leftovers};
 use crate::scheduler::Scheduler;
 use crate::server::DiarioPlugin;
 use crate::store::{Store, WriterLock, acquire_writer_lock};
@@ -39,6 +39,7 @@ async fn start_up(
         acquire_writer_lock(&config.database_url),
     )
     .await?;
+    remove_leftovers();
     let applied = within(
         deadline,
         limit,
