@@ -279,6 +279,35 @@ async fn events_after_the_newest_seq_answers_empty_and_keeps_the_alerts() {
 }
 
 #[tokio::test]
+async fn status_fails_while_the_hub_is_ahead_of_the_database() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let scheduler = prepared(&db.url, FakeGazette::new(vec![])).await;
+    let newest = scheduler
+        .monitor()
+        .store()
+        .last_issued_seq()
+        .await
+        .expect("newest seq");
+    let plugin = plugin(&scheduler);
+    assert_eq!(status(&plugin).await.state, i32::from(State::Idle));
+
+    assert_eq!(page(&plugin, newest + 5, 0).await, []);
+    let ahead = status(&plugin).await;
+    assert_eq!(ahead.state, i32::from(State::Failing));
+    assert_eq!(
+        ahead.message,
+        "the hub is ahead of this database: reset the hub's position for this plugin"
+    );
+
+    assert_eq!(page(&plugin, newest, 0).await, []);
+    let in_line = status(&plugin).await;
+    assert_eq!(in_line.state, i32::from(State::Idle));
+    assert_eq!(in_line.message, "");
+}
+
+#[tokio::test]
 async fn database_failures_never_show_the_password() {
     let scheduler = unprepared(UNREACHABLE_DATABASE, FakeGazette::new(vec![]));
     let plugin = plugin(&scheduler);

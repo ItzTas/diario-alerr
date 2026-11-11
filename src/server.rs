@@ -30,6 +30,7 @@ const HUB_AHEAD: &str =
 
 pub struct DiarioPlugin<G> {
     scheduler: Arc<Scheduler<G>>,
+    hub_ahead: AtomicBool,
     hub_ahead_reported: AtomicBool,
     status_query_limit: Duration,
 }
@@ -38,6 +39,7 @@ impl<G: Gazette> DiarioPlugin<G> {
     pub fn new(scheduler: Arc<Scheduler<G>>) -> DiarioPlugin<G> {
         DiarioPlugin {
             scheduler,
+            hub_ahead: AtomicBool::new(false),
             hub_ahead_reported: AtomicBool::new(false),
             status_query_limit: STATUS_QUERY_LIMIT,
         }
@@ -46,7 +48,9 @@ impl<G: Gazette> DiarioPlugin<G> {
     async fn read_events(&self, after: i64, limit: i64) -> Result<Vec<Event>, StoreError> {
         let store = self.scheduler.monitor().store();
         let last_issued = store.last_issued_seq().await?;
-        if after > last_issued {
+        let hub_ahead = after > last_issued;
+        self.hub_ahead.store(hub_ahead, Ordering::Relaxed);
+        if hub_ahead {
             self.report_hub_ahead(after, last_issued);
             return Ok(Vec::new());
         }
@@ -101,7 +105,13 @@ impl<G: Gazette> Plugin for DiarioPlugin<G> {
         let cycle = self.scheduler.state();
         let last_success = self.last_success().await;
         let interval = self.scheduler.monitor().interval();
-        Ok(Response::new(status_of(&cycle, last_success, interval)))
+        let hub_ahead = self.hub_ahead.load(Ordering::Relaxed);
+        Ok(Response::new(status_of(
+            &cycle,
+            last_success,
+            interval,
+            hub_ahead,
+        )))
     }
 
     async fn check(&self, _: Request<CheckRequest>) -> Result<Response<CheckResponse>, Status> {
@@ -176,8 +186,9 @@ fn status_of(
     cycle: &CycleState,
     last_success: Option<Option<DateTime<Utc>>>,
     interval: Duration,
+    hub_ahead: bool,
 ) -> StatusResponse {
-    let (state, message) = state_and_message(cycle, last_success.is_some());
+    let (state, message) = state_and_message(cycle, last_success.is_some(), hub_ahead);
     StatusResponse {
         state: state.into(),
         message,
@@ -187,7 +198,14 @@ fn status_of(
     }
 }
 
-fn state_and_message(cycle: &CycleState, database_answered: bool) -> (State, String) {
+fn state_and_message(
+    cycle: &CycleState,
+    database_answered: bool,
+    hub_ahead: bool,
+) -> (State, String) {
+    if hub_ahead {
+        return (State::Failing, HUB_AHEAD.to_owned());
+    }
     if cycle.running {
         return (State::Checking, String::new());
     }
