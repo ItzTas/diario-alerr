@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use reqwest::{Certificate, Response, StatusCode};
 use serde::{Deserialize, Deserializer};
 
@@ -214,7 +214,8 @@ where
 
 impl Media {
     fn edition(self) -> Result<Edition, GazetteError> {
-        let Some(published) = parse_wordpress_time(&self.date_gmt) else {
+        let parsed = parse_wordpress_time(&self.date_gmt);
+        let Some(published) = parsed.filter(|published| published.year() >= 1) else {
             return Err(GazetteError::Date {
                 edition: self.id,
                 raw: self.date_gmt,
@@ -357,6 +358,27 @@ mod tests {
             error.to_string(),
             r#"edition 0: date_gmt "" is not a WordPress timestamp"#
         );
+    }
+
+    #[test]
+    fn editions_are_dated_from_year_1() {
+        let edition = |date: &str| {
+            let body = format!(r#"[{{"id": 5, "date_gmt": "{date}"}}]"#);
+            let item = decode_media(body.as_bytes()).unwrap().into_iter().next();
+            item.unwrap().edition()
+        };
+
+        let error = edition("0000-06-01T00:00:00").unwrap_err();
+        assert!(
+            matches!(&error, GazetteError::Date { edition: 5, raw } if raw == "0000-06-01T00:00:00"),
+            "{error}"
+        );
+        assert_eq!(
+            error.to_string(),
+            r#"edition 5: date_gmt "0000-06-01T00:00:00" is not a WordPress timestamp"#
+        );
+        let first = edition("0001-01-01T00:00:00").unwrap();
+        assert_eq!(first.published, utc("0001-01-01T00:00:00Z"));
     }
 
     const EDITION: &str = r#"[{"id": 1, "date_gmt": "2026-11-01T10:00:00"}]"#;
