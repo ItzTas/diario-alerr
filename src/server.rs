@@ -211,7 +211,91 @@ fn timestamp(at: DateTime<Utc>) -> Timestamp {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use chrono::DateTime;
+    use monitor_hub_plugin::migrate::up;
+    use monitor_hub_plugin::proto::EventsRequest;
+    use monitor_hub_plugin::proto::plugin_server::Plugin;
+    use monitor_hub_plugin_testkit::database;
     use serde_json::{Value, json};
+    use tokio::runtime::{Builder, Runtime};
+    use tokio_postgres::NoTls;
+    use tonic::Request;
+
+    use super::{DiarioPlugin, HUB_AHEAD};
+    use crate::gazette::{Client, HTTP_TIMEOUT};
+    use crate::logtest::{captured, logged};
+    use crate::monitor::{Monitor, MonitorOptions};
+    use crate::scheduler::Scheduler;
+    use crate::store::{MIGRATIONS, Store};
+
+    fn runtime() -> Runtime {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+    }
+
+    fn plugin(url: &str) -> DiarioPlugin<Client> {
+        let now = DateTime::parse_from_rfc3339("2026-11-09T12:00:00Z")
+            .expect("timestamp")
+            .to_utc();
+        let options = MonitorOptions {
+            terms: vec!["TALES SABINI".to_owned()],
+            interval: Duration::from_secs(30 * 60),
+            start_after: now,
+            clock: Arc::new(move || now),
+        };
+        let gazette =
+            Client::new("http://127.0.0.1:9/media".to_owned(), HTTP_TIMEOUT).expect("client");
+        let monitor = Monitor::new(Store::new(url).expect("store"), gazette, options);
+        DiarioPlugin::new(Scheduler::new(Arc::new(monitor)))
+    }
+
+    async fn migrate(url: &str) {
+        let (mut client, connection) = tokio_postgres::connect(url, NoTls).await.expect("connect");
+        tokio::spawn(connection);
+        up(&mut client, MIGRATIONS).await.expect("migrate");
+    }
+
+    #[test]
+    fn a_hub_ahead_of_the_database_is_reported_once() {
+        let runtime = runtime();
+        let Some(db) = runtime.block_on(database()) else {
+            return;
+        };
+        runtime.block_on(migrate(&db.url));
+        let plugin = plugin(&db.url);
+        let store = plugin.scheduler.monitor().store();
+        runtime
+            .block_on(plugin.scheduler.monitor().prepare())
+            .expect("prepare");
+        let newest = runtime.block_on(store.last_issued_seq()).expect("newest");
+        let ahead = newest + 5;
+
+        let events = captured(|| {
+            for _ in 0..2 {
+                let request = Request::new(EventsRequest {
+                    after: ahead,
+                    limit: 0,
+                });
+                let page = runtime.block_on(plugin.events(request)).expect("events");
+                assert!(page.into_inner().events.is_empty());
+            }
+        });
+
+        assert_eq!(
+            events,
+            [logged(&[
+                ("after", &ahead.to_string()),
+                ("last_issued", &newest.to_string()),
+                ("level", "ERROR"),
+                ("message", HUB_AHEAD),
+            ])]
+        );
+    }
 
     #[test]
     fn plugin_json_matches_the_contract() {
