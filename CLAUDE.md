@@ -65,7 +65,7 @@ git config core.hooksPath .githooks   # once per clone
   used the first time, when the database has no state yet. Default: three days ago.
 - `STATE_FILE`: the `state.json` of earlier, file-based versions. When it exists and the database
   has no state yet, its cursor, seen editions, alerts and deliveries are imported instead of
-  sending the welcome alert. The compose file points it at `/data/state.json`.
+  sending the welcome alert.
 - `PUBLIC_URL`: link of the RSS channel (compose builds it from `PUBLIC_HOST`). `HTTP_PORT`
   (default 8080).
 - `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` turn on Telegram; `NTFY_URL` (+ `NTFY_TOPIC`, default
