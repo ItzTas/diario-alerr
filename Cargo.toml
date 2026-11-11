@@ -1,0 +1,16 @@
+[package]
+name = "diario-alerr"
+version = "2.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "diario_alerr"
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["now"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
