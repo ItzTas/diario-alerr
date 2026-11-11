@@ -439,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn failures_read_like_go() {
+    fn failure_text_names_the_exit_and_the_first_clean_stderr_line() {
         let path = Path::new("/var/tmp/secret-dir/edition-abc.pdf");
         let cases: [(i32, &[u8], &str); 7] = [
             (1 << 8, b"", "exit status 1"),
