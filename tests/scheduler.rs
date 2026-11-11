@@ -2,7 +2,7 @@ mod support;
 
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -201,4 +201,95 @@ async fn a_panicking_cycle_is_reported_and_the_scheduler_keeps_going() {
     })
     .await;
     assert!(!running.is_finished());
+}
+
+struct FirstListingFails {
+    inner: FakeGazette,
+    failed: AtomicBool,
+}
+
+impl Gazette for FirstListingFails {
+    fn list_editions(
+        &self,
+        after: DateTime<Utc>,
+    ) -> impl Future<Output = Result<Vec<Edition>, GazetteError>> + Send {
+        let fail = !self.failed.swap(true, Ordering::SeqCst);
+        let listing = self.inner.list_editions(after);
+        async move {
+            if fail {
+                return Err(GazetteError::TooManyPages { limit: 1 });
+            }
+            listing.await
+        }
+    }
+
+    fn scan(
+        &self,
+        edition: &Edition,
+        terms: &[String],
+    ) -> impl Future<Output = Result<Option<Hits>, GazetteError>> + Send {
+        self.inner.scan(edition, terms)
+    }
+}
+
+#[tokio::test]
+async fn a_problem_stays_readable_until_a_complete_cycle_clears_it() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let fake = FakeGazette::new(vec![]);
+    let gazette = FirstListingFails {
+        inner: fake.clone(),
+        failed: AtomicBool::new(false),
+    };
+    let scheduler = scheduler(&db.url, gazette, HALF_HOUR).await;
+
+    let _running = start(&scheduler);
+
+    eventually(Instant::now() + PATIENCE, "the first cycle fails", || {
+        let state = scheduler.state();
+        !state.running && state.problem.is_some()
+    })
+    .await;
+    let problem = scheduler.state().problem;
+    fake.gated();
+    assert!(scheduler.trigger());
+    eventually(Instant::now() + PATIENCE, "the next cycle waits", || {
+        scheduler.state().running && fake.listing_afters().len() == 1
+    })
+    .await;
+    assert_eq!(scheduler.state().problem, problem);
+    fake.open_gate();
+    eventually(Instant::now() + PATIENCE, "the next cycle ends", || {
+        !scheduler.state().running
+    })
+    .await;
+    assert_eq!(scheduler.state().problem, None);
+}
+
+#[tokio::test]
+async fn two_triggers_while_waiting_start_one_cycle() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let fake = FakeGazette::new(vec![]);
+    let scheduler = scheduler(&db.url, fake.clone(), HALF_HOUR).await;
+    let listings = || fake.listing_afters().len();
+    let idle = || !scheduler.state().running;
+
+    let _running = start(&scheduler);
+
+    eventually(Instant::now() + PATIENCE, "the first cycle ends", || {
+        listings() == 1 && idle()
+    })
+    .await;
+    assert!(scheduler.trigger());
+    assert!(scheduler.trigger());
+    eventually(
+        Instant::now() + PATIENCE,
+        "the triggered cycle ends",
+        || listings() >= 2 && idle(),
+    )
+    .await;
+    assert_eq!(listings(), 2);
 }
