@@ -54,7 +54,7 @@ func unescapeVectors() []stringCase {
 	return mapStrings([]string{
 		"ED &#8211; 1", "&amp;", "&amp;amp;", "&ndash;", "&#x2013;", "&#X2013;", "&#8211", "&#0;", "&#128;",
 		"&#xD800;", "&#1114112;", "&notit;", "&amp", "&ampx", "&Aacute;", "&aacute", "&nbsp;", "&#39;",
-		"&unknown;", "&", "&;", "&#;", "&#x;", "DIARIO-ALE-RR-ED.-4763",
+		"&unknown;", "&", "&;", "&#;", "&#x;", "&amp;ccedil;", "&amp;#231;", "DIARIO-ALE-RR-ED.-4763",
 	}, html.UnescapeString)
 }
 
@@ -122,6 +122,17 @@ func findTermsVectors() []findTermsCase {
 		{RawPages: []string{long("º", 300) + " PAULO SANTOS " + long("–", 300)}, Terms: []string{"paulo santos"}},
 		{RawPages: strings.Split("Capa\fNomeação de Paulo Santos\f", "\f"), Terms: []string{"Paulo Santos"}},
 		{RawPages: strings.Split("Capa\f\fPaulo\f", "\f"), Terms: []string{"Paulo", "Capa"}},
+		{RawPages: []string{long("\u2013", 300) + " PAULO SANTOS"}, Terms: []string{"paulo santos"}},
+		{
+			RawPages: []string{long("\u00df", 100) + long("\u4e16", 100) + long("\U0001f600", 100) + " PAULO SANTOS " + long("\u754c", 200)},
+			Terms:    []string{"paulo santos"},
+		},
+		{
+			RawPages: []string{"nada", long("\u4e16", 200) + " PAULO SANTOS " + long("\u00df", 50), "PAULO SANTOS"},
+			Terms:    []string{"paulo santos"},
+		},
+		{RawPages: []string{}, Terms: []string{"Paulo Santos"}},
+		{RawPages: []string{"Paulo Santos"}, Terms: []string{}},
 	}
 	for i, input := range inputs {
 		pages := make([]string, len(input.RawPages))
