@@ -28,7 +28,7 @@ Everything is in English: identifiers, packages, files, SQL, logs and user-facin
 ├── .golangci.yml              # golangci-lint v2, standard set + gosec/errorlint/noctx/bodyclose
 ├── .prototools                # proto: pins the Go toolchain
 ├── Dockerfile                 # multi-stage; runtime is alpine + poppler-utils (pdftotext)
-├── compose.yaml               # app + postgres:18, both read-only, no capabilities
+├── compose.yaml               # app only, read-only, no capabilities; joins the external `postgres` network
 ├── Makefile                   # check, lint, test, generate, dev, up, down
 ├── sqlc.yaml                  # schema=sql/schema queries=sql/queries out=internal/db (pgx/v5)
 ├── sql/

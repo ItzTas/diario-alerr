@@ -32,7 +32,7 @@ golangci-lint run ./...
 go tool sqlc generate         # regenerate internal/db from sql/schema + sql/queries
 go tool air                   # hot reload, reads .env (.air.toml)
 make check                    # gofmt + vet + golangci-lint + go test -race
-docker compose up -d          # app + postgres:18
+docker compose up -d          # app only; joins the shared `postgres` network
 git config core.hooksPath .githooks   # once per clone
 ```
 
