@@ -26,7 +26,6 @@ pub(crate) fn parse_date(raw: &str) -> Option<DateTime<Utc>> {
         .then(|| day.and_time(NaiveTime::MIN).and_utc())
 }
 
-#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn format_wordpress_time(at: DateTime<Utc>) -> String {
     at.format("%Y-%m-%dT%H:%M:%S").to_string()
 }
