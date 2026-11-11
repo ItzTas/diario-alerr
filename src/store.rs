@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use deadpool_postgres::{Manager, Pool, PoolError, Runtime, TimeoutType};
 use monitor_hub_plugin::migrate::{MigrateError, Migration, up};
 use tokio::task::JoinHandle;
+use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, NoTls, Row, Transaction};
 
 use crate::domain::Alert;
@@ -25,6 +26,14 @@ pub const WRITER_LOCK_ID: i64 = 0x6469_6172_696f;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const POOL_SIZE: usize = 4;
+const POOL_LIMITS: Limits = Limits {
+    statement: Duration::from_secs(20),
+    lock: Duration::from_secs(5),
+};
+const KEEPALIVES_IDLE: Duration = Duration::from_secs(30);
+const KEEPALIVES_INTERVAL: Duration = Duration::from_secs(10);
+const KEEPALIVES_RETRIES: u32 = 3;
+const TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
 
 const TRY_WRITER_LOCK: &str = "SELECT pg_try_advisory_lock($1)";
 
@@ -65,9 +74,28 @@ pub enum StoreError {
     #[error(transparent)]
     Pool(PoolError),
     #[error(transparent)]
-    Database(#[from] tokio_postgres::Error),
+    Database(tokio_postgres::Error),
     #[error(transparent)]
     Migrate(#[from] MigrateError),
+}
+
+impl From<tokio_postgres::Error> for StoreError {
+    fn from(error: tokio_postgres::Error) -> Self {
+        let timeouts = [
+            (SqlState::QUERY_CANCELED, "running a database statement"),
+            (SqlState::LOCK_NOT_AVAILABLE, "waiting for a database lock"),
+        ];
+        let step = error.code().and_then(|code| {
+            timeouts
+                .into_iter()
+                .find(|(timeout, _)| timeout == code)
+                .map(|(_, step)| step)
+        });
+        let Some(step) = step else {
+            return StoreError::Database(error);
+        };
+        StoreError::Timeout(step)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,13 +111,19 @@ pub struct SequencedAlert {
     pub alert: Alert,
 }
 
+#[derive(Clone, Copy)]
+struct Limits {
+    statement: Duration,
+    lock: Duration,
+}
+
 pub struct WriterLock {
     client: Client,
     connection: Option<JoinHandle<Result<(), tokio_postgres::Error>>>,
 }
 
 pub async fn acquire_writer_lock(database_url: &str) -> Result<WriterLock, StoreError> {
-    let config = parse(database_url)?;
+    let config = lock_config(database_url)?;
     let (client, connection) = tokio::time::timeout(CONNECT_TIMEOUT, config.connect(NoTls))
         .await
         .map_err(|_| StoreError::Timeout("connecting to the database for the writer lock"))??;
@@ -128,7 +162,11 @@ pub struct Store {
 
 impl Store {
     pub fn new(database_url: &str) -> Result<Store, StoreError> {
-        let manager = Manager::new(parse(database_url)?, NoTls);
+        Ok(Store::with_config(pool_config(database_url, POOL_LIMITS)?))
+    }
+
+    fn with_config(config: Config) -> Store {
+        let manager = Manager::new(config, NoTls);
         let pool = Pool::builder(manager)
             .max_size(POOL_SIZE)
             .runtime(Runtime::Tokio1)
@@ -136,7 +174,7 @@ impl Store {
             .wait_timeout(Some(CONNECT_TIMEOUT))
             .build()
             .expect("the pool has a runtime for its timeouts");
-        Ok(Store { pool })
+        Store { pool }
     }
 
     pub async fn initialize(
@@ -231,6 +269,36 @@ impl Store {
     }
 }
 
+fn pool_config(database_url: &str, limits: Limits) -> Result<Config, StoreError> {
+    let mut config = lock_config(database_url)?;
+    let limits = format!(
+        "-c statement_timeout={} -c lock_timeout={}",
+        limits.statement.as_millis(),
+        limits.lock.as_millis()
+    );
+    let options = after_existing(config.get_options(), limits);
+    config.options(options);
+    Ok(config)
+}
+
+fn after_existing(existing: Option<&str>, settings: String) -> String {
+    let Some(existing) = existing.filter(|options| !options.trim().is_empty()) else {
+        return settings;
+    };
+    format!("{existing} {settings}")
+}
+
+fn lock_config(database_url: &str) -> Result<Config, StoreError> {
+    let mut config = parse(database_url)?;
+    config
+        .keepalives(true)
+        .keepalives_idle(KEEPALIVES_IDLE)
+        .keepalives_interval(KEEPALIVES_INTERVAL)
+        .keepalives_retries(KEEPALIVES_RETRIES)
+        .tcp_user_timeout(TCP_USER_TIMEOUT);
+    Ok(config)
+}
+
 fn parse(database_url: &str) -> Result<Config, StoreError> {
     database_url.parse().map_err(|_| StoreError::InvalidUrl)
 }
@@ -273,4 +341,212 @@ fn sequenced_alert(row: &Row) -> Result<SequencedAlert, tokio_postgres::Error> {
             published: row.try_get(5)?,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use chrono::DateTime;
+    use monitor_hub_plugin::migrate::up;
+    use monitor_hub_plugin_testkit::{Database, database};
+    use tokio_postgres::{Client, NoTls};
+
+    use super::{
+        Limits, MIGRATIONS, POOL_SIZE, Store, StoreError, acquire_writer_lock, lock_config,
+        pool_config,
+    };
+    use crate::domain::Alert;
+
+    const URL: &str = "postgres://diario:hunter2@db.internal:5432/diario";
+    const SHORT: Limits = Limits {
+        statement: Duration::from_millis(400),
+        lock: Duration::from_millis(300),
+    };
+    const SLACK: Duration = Duration::from_secs(3);
+
+    async fn connect(url: &str) -> Client {
+        let (client, connection) = tokio_postgres::connect(url, NoTls).await.expect("connect");
+        tokio::spawn(connection);
+        client
+    }
+
+    async fn migrated() -> Option<Database> {
+        let database = database().await?;
+        let mut client = connect(&database.url).await;
+        up(&mut client, MIGRATIONS).await.expect("migrate");
+        Some(database)
+    }
+
+    async fn show(client: &Client, setting: &str) -> String {
+        client
+            .query_one(&format!("SHOW {setting}"), &[])
+            .await
+            .expect("show")
+            .get(0)
+    }
+
+    fn with_query(url: &str, parameter: &str) -> String {
+        let separator = if url.contains('?') { '&' } else { '?' };
+        format!("{url}{separator}{parameter}")
+    }
+
+    fn welcome() -> Alert {
+        let at = DateTime::parse_from_rfc3339("2026-11-05T00:00:00Z")
+            .expect("timestamp")
+            .to_utc();
+        Alert {
+            id: "welcome".to_owned(),
+            title: "title".to_owned(),
+            link: "https://x/welcome".to_owned(),
+            body: "body".to_owned(),
+            published: at,
+        }
+    }
+
+    fn assert_keepalives(config: &tokio_postgres::Config) {
+        assert!(config.get_keepalives());
+        assert_eq!(config.get_keepalives_idle(), Duration::from_secs(30));
+        assert_eq!(
+            config.get_keepalives_interval(),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(config.get_keepalives_retries(), Some(3));
+        assert_eq!(
+            config.get_tcp_user_timeout(),
+            Some(&Duration::from_secs(60))
+        );
+    }
+
+    #[test]
+    fn pool_connections_get_limits_and_keepalives() {
+        let config = pool_config(URL, super::POOL_LIMITS).expect("config");
+        assert_eq!(
+            config.get_options(),
+            Some("-c statement_timeout=20000 -c lock_timeout=5000")
+        );
+        assert_keepalives(&config);
+    }
+
+    #[test]
+    fn the_lock_connection_gets_keepalives_and_no_limits() {
+        let config = lock_config(URL).expect("config");
+        assert_eq!(config.get_options(), None);
+        assert_keepalives(&config);
+    }
+
+    #[test]
+    fn the_store_settings_come_after_the_urls_own() {
+        let url = with_query(
+            URL,
+            "options=-c%20statement_timeout%3D1&keepalives_idle=5&tcp_user_timeout=1",
+        );
+        let config = pool_config(&url, super::POOL_LIMITS).expect("config");
+        assert_eq!(
+            config.get_options(),
+            Some("-c statement_timeout=1 -c statement_timeout=20000 -c lock_timeout=5000")
+        );
+        assert_keepalives(&config);
+    }
+
+    #[tokio::test]
+    async fn pool_and_lock_connections_carry_their_limits() {
+        let Some(db) = migrated().await else {
+            return;
+        };
+        let store = Store::new(&db.url).expect("store");
+        let pooled = store.client().await.expect("pooled connection");
+        assert_eq!(show(&pooled, "statement_timeout").await, "20s");
+        assert_eq!(show(&pooled, "lock_timeout").await, "5s");
+
+        let lock = acquire_writer_lock(&db.url).await.expect("lock");
+        assert_eq!(show(&lock.client, "statement_timeout").await, "0");
+        assert_eq!(show(&lock.client, "lock_timeout").await, "0");
+    }
+
+    #[tokio::test]
+    async fn the_urls_own_options_still_apply() {
+        let Some(db) = migrated().await else {
+            return;
+        };
+        let url = with_query(&db.url, "options=-c%20application_name%3Dx");
+        let store = Store::new(&url).expect("store");
+        let pooled = store.client().await.expect("pooled connection");
+        assert_eq!(show(&pooled, "application_name").await, "x");
+        assert_eq!(show(&pooled, "statement_timeout").await, "20s");
+    }
+
+    #[tokio::test]
+    async fn a_held_state_row_times_out_without_wedging_the_pool() {
+        let Some(db) = migrated().await else {
+            return;
+        };
+        let store = Store::with_config(pool_config(&db.url, SHORT).expect("config"));
+        store
+            .initialize(welcome().published, &welcome())
+            .await
+            .expect("initialize");
+        let outside = connect(&db.url).await;
+        outside
+            .batch_execute("BEGIN; SELECT * FROM monitor_state FOR UPDATE")
+            .await
+            .expect("hold the state row");
+
+        let started = Instant::now();
+        let error = tokio::time::timeout(SHORT.lock + SLACK, store.ack_alerts(7))
+            .await
+            .expect("the held row stopped the call within the lock timeout")
+            .expect_err("the row is held");
+        assert!(
+            started.elapsed() < SHORT.lock + SLACK,
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(matches!(error, StoreError::Timeout(_)), "{error:?}");
+        assert_eq!(error.to_string(), "waiting for a database lock timed out");
+
+        for _ in 0..POOL_SIZE {
+            let abandoned = tokio::time::timeout(Duration::from_millis(20), store.ack_alerts(9));
+            assert!(abandoned.await.is_err(), "the abandoned call finished");
+        }
+        let cursor = tokio::time::timeout(SHORT.lock + SLACK, store.cursor())
+            .await
+            .expect("the pool is usable again")
+            .expect("cursor");
+        assert_eq!(cursor, welcome().published);
+
+        outside.batch_execute("ROLLBACK").await.expect("release");
+        store.ack_alerts(7).await.expect("ack once released");
+        let acked: i64 = outside
+            .query_one("SELECT acked_seq FROM monitor_state", &[])
+            .await
+            .expect("acked_seq")
+            .get(0);
+        assert_eq!(acked, 7);
+    }
+
+    #[tokio::test]
+    async fn statement_timeouts_are_reported_as_timeouts() {
+        let Some(db) = migrated().await else {
+            return;
+        };
+        let store = Store::with_config(pool_config(&db.url, SHORT).expect("config"));
+        let pooled = store.client().await.expect("pooled connection");
+        let started = Instant::now();
+        let error = tokio::time::timeout(
+            SHORT.statement + SLACK,
+            pooled.query_one("SELECT pg_sleep(30)", &[]),
+        )
+        .await
+        .expect("the server ended the statement within its limit")
+        .expect_err("the statement outlived its limit");
+        assert!(
+            started.elapsed() < SHORT.statement + SLACK,
+            "{:?}",
+            started.elapsed()
+        );
+        let error = StoreError::from(error);
+        assert!(matches!(error, StoreError::Timeout(_)), "{error:?}");
+        assert_eq!(error.to_string(), "running a database statement timed out");
+    }
 }
