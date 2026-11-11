@@ -31,18 +31,43 @@ async fn download_pages_in(
     let file = tempfile::Builder::new()
         .prefix("edition-")
         .suffix(".pdf")
-        .tempfile_in(dir)?;
-    save(response, &file).await?;
+        .tempfile_in(dir)
+        .map_err(|error| GazetteError::CreateTempFile(without_path(error)))?;
+    save(response, url, &file).await?;
     extract_pages(file.path()).await
 }
 
-async fn save(mut response: Response, file: &NamedTempFile) -> Result<(), GazetteError> {
-    let mut out = tokio::fs::File::from_std(file.as_file().try_clone()?);
-    while let Some(chunk) = response.chunk().await? {
-        out.write_all(&chunk).await?;
+fn without_path(error: io::Error) -> io::Error {
+    let text = error.to_string();
+    let Some((cause, _)) = text.split_once(" at path ") else {
+        return error;
+    };
+    io::Error::new(error.kind(), cause)
+}
+
+async fn save(mut response: Response, url: &str, file: &NamedTempFile) -> Result<(), GazetteError> {
+    let write_error = |source| GazetteError::WriteTempFile {
+        file: file_name(file.path()),
+        source,
+    };
+    let mut out = tokio::fs::File::from_std(file.as_file().try_clone().map_err(write_error)?);
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|source| GazetteError::Download {
+            url: url.to_owned(),
+            source,
+        })?
+    {
+        out.write_all(&chunk).await.map_err(write_error)?;
     }
-    out.flush().await?;
-    Ok(())
+    out.flush().await.map_err(write_error)
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 pub(crate) async fn extract_pages(path: &Path) -> Result<Vec<String>, GazetteError> {
@@ -71,7 +96,8 @@ async fn run(
             "timed out after {limit:?}"
         )));
     };
-    let (stdout, stderr, status) = output?;
+    let (stdout, stderr, status) =
+        output.map_err(|error| GazetteError::Pdftotext(error.to_string()))?;
     if !status.success() {
         return Err(GazetteError::Pdftotext(failure(status, &stderr, path)));
     }
@@ -107,11 +133,12 @@ async fn read_prefix(pipe: Option<impl AsyncRead + Unpin>, limit: usize) -> io::
     }
 }
 
-async fn stop(child: &mut Child) -> io::Result<()> {
-    if child.try_wait()?.is_some() {
+async fn stop(child: &mut Child) -> Result<(), GazetteError> {
+    let kill_error = |error: io::Error| GazetteError::Pdftotext(format!("kill: {error}"));
+    if child.try_wait().map_err(kill_error)?.is_some() {
         return Ok(());
     }
-    child.kill().await
+    child.kill().await.map_err(kill_error)
 }
 
 fn failure(status: ExitStatus, stderr: &[u8], path: &Path) -> String {
@@ -181,11 +208,7 @@ fn signal_name(signal: i32) -> String {
 
 fn stderr_excerpt(stderr: &[u8], path: &Path) -> Option<String> {
     let text = String::from_utf8_lossy(stderr);
-    let file_name = path
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .unwrap_or_default();
-    let text = text.replace(&*path.to_string_lossy(), &file_name);
+    let text = text.replace(&*path.to_string_lossy(), &file_name(path));
     text.lines()
         .map(|line| line.chars().filter(|c| !c.is_control()).collect::<String>())
         .map(|line| line.trim().to_owned())
@@ -341,8 +364,41 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(error, GazetteError::Http(_)), "{error}");
+        assert!(
+            error.to_string().starts_with(&format!("download {url}: ")),
+            "{error}"
+        );
+        assert!(std::error::Error::source(&error).is_some(), "{error}");
         assert_eq!(leftovers(dir.path()), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn an_unusable_temp_dir_is_reported_without_its_path() {
+        let dir = TempDir::new().unwrap();
+        let url = serve_raw(response(FAKE_PDF.len(), FAKE_PDF), false).await;
+
+        let error = download_pages_in(&reqwest::Client::new(), &url, &dir.path().join("gone"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "create temp file: No such file or directory (os error 2)"
+        );
+    }
+
+    #[test]
+    fn write_errors_name_the_file_only() {
+        let error = GazetteError::WriteTempFile {
+            file: "edition-abc.pdf".to_owned(),
+            source: std::io::Error::other("no space left on device"),
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "write edition-abc.pdf: no space left on device"
+        );
+        assert!(std::error::Error::source(&error).is_some());
     }
 
     #[tokio::test]

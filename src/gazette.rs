@@ -31,10 +31,19 @@ pub enum GazetteError {
     Status { url: String, status: StatusCode },
     #[error("decode media list: {0}")]
     Decode(serde_json::Error),
+    #[error("decode media list: {0}")]
+    ListingBody(#[source] reqwest::Error),
     #[error("edition {edition}: date_gmt {} is not a WordPress timestamp", go_quote(.raw))]
     Date { edition: i64, raw: String },
-    #[error(transparent)]
-    Io(#[from] std::io::Error),
+    #[error("download {url}: {source}")]
+    Download { url: String, source: reqwest::Error },
+    #[error("create temp file: {0}")]
+    CreateTempFile(#[source] std::io::Error),
+    #[error("write {file}: {source}")]
+    WriteTempFile {
+        file: String,
+        source: std::io::Error,
+    },
     #[error("pdftotext: {0}")]
     Pdftotext(String),
 }
@@ -98,7 +107,7 @@ impl Client {
     async fn fetch_page(&self, url: &str) -> Result<(Vec<Edition>, i64), GazetteError> {
         let response = get(&self.http, url).await?;
         let total_pages = total_pages(&response);
-        let body = response.bytes().await?;
+        let body = response.bytes().await.map_err(GazetteError::ListingBody)?;
         let editions = decode_media(&body)
             .map_err(GazetteError::Decode)?
             .into_iter()

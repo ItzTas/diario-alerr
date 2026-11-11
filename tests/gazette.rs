@@ -1,11 +1,14 @@
 mod support;
 
 use std::collections::HashMap;
+use std::error::Error;
 use std::future::Future;
+use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::Router;
+use axum::body::Body;
 use axum::extract::Query;
 use axum::http::{HeaderValue, StatusCode, Uri};
 use axum::response::IntoResponse;
@@ -13,6 +16,7 @@ use axum::routing::get;
 use chrono::{DateTime, Utc};
 use diario_alerr::domain::Edition;
 use diario_alerr::gazette::{Client, GazetteError, HTTP_TIMEOUT};
+use futures_util::stream::{self, StreamExt};
 use serde_json::json;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -83,10 +87,17 @@ async fn within_client_timeout<T>(work: impl Future<Output = T>) -> T {
 }
 
 fn assert_timeout(error: &GazetteError) {
-    assert!(
-        matches!(error, GazetteError::Http(inner) if inner.is_timeout()),
-        "{error}"
-    );
+    let mut cause: Option<&dyn Error> = Some(error);
+    while let Some(current) = cause {
+        if current
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_timeout)
+        {
+            return;
+        }
+        cause = current.source();
+    }
+    panic!("not a timeout: {error}");
 }
 
 #[test]
@@ -301,7 +312,10 @@ async fn stalled_download_fails_within_the_client_timeout() {
 
     let result = within_client_timeout(client.scan(&edition_at(site.pdf_url(5)), &terms())).await;
 
-    assert_timeout(&result.unwrap_err());
+    let error = result.unwrap_err();
+    assert_timeout(&error);
+    let prefix = format!("download {}: ", site.pdf_url(5));
+    assert!(error.to_string().starts_with(&prefix), "{error}");
 }
 
 #[tokio::test]
@@ -312,8 +326,38 @@ async fn stalled_listing_fails_within_the_client_timeout() {
 
     let result = within_client_timeout(client.list_editions(utc("2026-11-01T00:00:00Z"))).await;
 
-    assert_timeout(&result.unwrap_err());
+    let error = result.unwrap_err();
+    assert_timeout(&error);
+    assert!(
+        error.to_string().starts_with("decode media list: "),
+        "{error}"
+    );
     assert_eq!(site.queries().len(), 1);
+}
+
+#[tokio::test]
+async fn a_broken_listing_body_reads_as_a_decode_error() {
+    let router = Router::new().route(
+        "/",
+        get(|| async {
+            let first = stream::iter([Ok::<_, io::Error>("[{")]);
+            let broken = stream::once(async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Err(io::Error::other("connection lost"))
+            });
+            Body::from_stream(first.chain(broken))
+        }),
+    );
+    let server = serve(router).await;
+    let client = Client::new(server.url.clone(), HTTP_TIMEOUT).unwrap();
+
+    let error = client.list_editions(Utc::now()).await.unwrap_err();
+
+    assert!(
+        error.to_string().starts_with("decode media list: "),
+        "{error}"
+    );
+    assert!(error.source().is_some(), "{error}");
 }
 
 #[tokio::test]
