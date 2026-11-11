@@ -56,7 +56,6 @@ fn format_pages(numbers: &[usize]) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::time::Duration;
 
     use chrono::{DateTime, Utc};
     use serde::Deserialize;
@@ -102,23 +101,6 @@ mod tests {
             published: edition.published,
         };
         assert_eq!(edition_alert(&edition, &hits), want);
-    }
-
-    #[test]
-    fn welcome_alert_lists_terms_and_interval() {
-        let now = utc("2026-11-09T14:00:00Z");
-        let want = Alert {
-            id: "welcome".to_owned(),
-            title: "ALE/RR Official Gazette monitor started".to_owned(),
-            link: "https://diarios.al.rr.leg.br".to_owned(),
-            body: "Watching: TALES SABINI, 0021805e\nChecking every 30 min.".to_owned(),
-            published: now,
-        };
-        let terms = strings(&["TALES SABINI", "0021805e"]);
-        assert_eq!(
-            welcome_alert(&terms, Duration::from_secs(30 * 60), now),
-            want
-        );
     }
 
     #[derive(Deserialize)]

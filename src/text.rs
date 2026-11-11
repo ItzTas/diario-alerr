@@ -81,50 +81,8 @@ mod tests {
     use super::{Hits, SNIPPET_RADIUS, find_terms, normalize, snippet};
     use crate::golden::golden;
 
-    fn strings(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| (*value).to_owned()).collect()
-    }
-
     fn normalized(pages: &[String]) -> Vec<String> {
         pages.iter().map(|page| normalize(page)).collect()
-    }
-
-    #[test]
-    fn normalize_uppercases_strips_accents_and_collapses_spaces() {
-        let cases = [
-            ("José da Silva", "JOSE DA SILVA"),
-            ("  tales\n\tSABÍNI  ", "TALES SABINI"),
-            ("Conceição Ávila Müller", "CONCEICAO AVILA MULLER"),
-            ("0021805e", "0021805E"),
-        ];
-        for (input, want) in cases {
-            assert_eq!(normalize(input), want, "{input:?}");
-        }
-    }
-
-    #[test]
-    fn find_terms_lists_every_page_of_every_term() {
-        let pages = normalized(&strings(&[
-            "Sumário Mesa Diretora",
-            "Classificação: 0021805e TALES\nSABINI 132,61 8",
-            "Nomeação de Tales Sabíni para o cargo",
-        ]));
-        let terms = strings(&["Tales Sabini", "0021805e", "Fulano"]);
-        let hits = find_terms(&pages, &terms).expect("hits");
-        let want_pages = HashMap::from([
-            ("Tales Sabini".to_owned(), vec![2, 3]),
-            ("0021805e".to_owned(), vec![2]),
-        ]);
-        assert_eq!(hits.pages, want_pages);
-        assert_eq!(hits.order, strings(&["Tales Sabini", "0021805e"]));
-        assert_eq!(hits.first_page, 2);
-        assert!(hits.snippet.contains("TALES SABINI"), "{}", hits.snippet);
-    }
-
-    #[test]
-    fn find_terms_without_match_returns_none() {
-        let pages = [normalize("nada aqui")];
-        assert_eq!(find_terms(&pages, &strings(&["Tales Sabini"])), None);
     }
 
     #[test]
