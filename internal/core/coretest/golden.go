@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-const regenerateCommand = "go test ./internal/... -run TestGoldenVectors -update-golden"
+const regenerateCommand = "go test ./internal/core ./internal/gazette ./internal/watch -run TestGoldenVectors -update-golden"
 
 var updateGolden bool
 
