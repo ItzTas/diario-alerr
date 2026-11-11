@@ -4,7 +4,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::timestamp::{parse_date, parse_rfc3339, parse_wordpress_time};
 
-pub const DEFAULT_GAZETTE_API_URL: &str = "https://diarios.al.rr.leg.br/wp-json/wp/v2/media";
+const DEFAULT_GAZETTE_API_URL: &str = "https://diarios.al.rr.leg.br/wp-json/wp/v2/media";
 
 pub struct Config {
     pub database_url: String,
@@ -27,7 +27,7 @@ pub enum ConfigError {
 }
 
 impl Config {
-    pub fn from_lookup(
+    fn from_lookup(
         lookup: impl Fn(&str) -> Option<String>,
         now: DateTime<Utc>,
     ) -> Result<Config, ConfigError> {

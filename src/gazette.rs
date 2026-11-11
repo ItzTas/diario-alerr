@@ -14,7 +14,7 @@ mod html;
 
 pub(crate) use html::html_unescape;
 
-pub const USER_AGENT: &str = "diario-alerr/2.0";
+const USER_AGENT: &str = "diario-alerr/2.0";
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 const PER_PAGE: u32 = 100;
 const MAX_PAGES: u32 = 100;

@@ -11,7 +11,7 @@ use tokio::process::{Child, Command};
 
 use crate::gazette::{GazetteError, get};
 
-pub(crate) const PDF_TIMEOUT: Duration = Duration::from_secs(300);
+const PDF_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_PDF_BYTES: usize = 256 << 20;
 const MAX_TEXT_BYTES: usize = 64 << 20;
 const STDERR_LIMIT: usize = 32 << 10;
@@ -95,7 +95,7 @@ fn file_name(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-pub(crate) async fn extract_pages(path: &Path) -> Result<Vec<String>, GazetteError> {
+async fn extract_pages(path: &Path) -> Result<Vec<String>, GazetteError> {
     let mut command = Command::new("pdftotext");
     command.args(["-enc", "UTF-8"]).arg(path).arg("-");
     run(command, path, PDF_TIMEOUT, MAX_TEXT_BYTES).await
