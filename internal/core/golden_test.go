@@ -40,6 +40,15 @@ type configVectorSet struct {
 	StartAfter []startAfterCase `json:"start_after"`
 	Interval   []intervalCase   `json:"interval"`
 	Required   []requiredCase   `json:"required"`
+	Precedence []precedenceCase `json:"precedence"`
+}
+
+type precedenceCase struct {
+	DatabaseURL          string  `json:"database_url"`
+	WatchTerms           string  `json:"watch_terms"`
+	CheckIntervalMinutes string  `json:"check_interval_minutes"`
+	StartAfter           string  `json:"start_after"`
+	Error                *string `json:"error"`
 }
 
 func errorText(err error) *string {
@@ -83,6 +92,7 @@ func configVectors(t *testing.T) configVectorSet {
 
 	for _, c := range []requiredCase{
 		{DatabaseURL: "", WatchTerms: "TALES SABINI"},
+		{DatabaseURL: "", WatchTerms: ""},
 		{DatabaseURL: "postgres://x@db/diario", WatchTerms: ""},
 		{DatabaseURL: "postgres://x@db/diario", WatchTerms: " , ,"},
 		{DatabaseURL: "postgres://x@db/diario", WatchTerms: "TALES SABINI"},
@@ -94,6 +104,21 @@ func configVectors(t *testing.T) configVectorSet {
 		_, err := FromEnvironment(time.Now)
 		c.Error = errorText(err)
 		set.Required = append(set.Required, c)
+	}
+
+	for _, c := range []precedenceCase{
+		{DatabaseURL: "postgres://x@db/diario", WatchTerms: "TALES SABINI", CheckIntervalMinutes: "half", StartAfter: "01/11/2026"},
+		{DatabaseURL: "", WatchTerms: "TALES SABINI", CheckIntervalMinutes: "half", StartAfter: ""},
+		{DatabaseURL: "postgres://x@db/diario", WatchTerms: "", CheckIntervalMinutes: "half", StartAfter: "01/11/2026"},
+		{DatabaseURL: "postgres://x@db/diario", WatchTerms: "TALES SABINI", CheckIntervalMinutes: "", StartAfter: "01/11/2026"},
+	} {
+		t.Setenv("DATABASE_URL", c.DatabaseURL)
+		t.Setenv("WATCH_TERMS", c.WatchTerms)
+		t.Setenv("CHECK_INTERVAL_MINUTES", c.CheckIntervalMinutes)
+		t.Setenv("START_AFTER", c.StartAfter)
+		_, err := FromEnvironment(time.Now)
+		c.Error = errorText(err)
+		set.Precedence = append(set.Precedence, c)
 	}
 	return set
 }

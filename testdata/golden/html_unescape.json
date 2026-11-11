@@ -92,6 +92,14 @@
     "output": "�"
   },
   {
+    "input": "&amp;ccedil;",
+    "output": "&ccedil;"
+  },
+  {
+    "input": "&amp;#231;",
+    "output": "&#231;"
+  },
+  {
     "input": "DIARIO-ALE-RR-ED.-4763",
     "output": "DIARIO-ALE-RR-ED.-4763"
   }
