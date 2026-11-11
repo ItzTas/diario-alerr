@@ -10,8 +10,7 @@ ARG TARGETOS TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
       -trimpath \
       -ldflags "-s -w" \
-      -o /out/diario-alerr . \
-    && mkdir -p /out/data
+      -o /out/diario-alerr .
 
 FROM alpine:3.24
 
@@ -19,9 +18,6 @@ FROM alpine:3.24
 RUN apk add --no-cache ca-certificates poppler-utils
 
 COPY --from=build /out/diario-alerr /usr/local/bin/diario-alerr
-COPY --from=build --chown=2000:2000 /out/data /data
-
-VOLUME /data
 
 USER 2000:2000
 
