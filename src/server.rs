@@ -30,6 +30,8 @@ const HUB_AHEAD: &str =
 
 pub struct DiarioPlugin<G> {
     scheduler: Arc<Scheduler<G>>,
+    first_read_boundary: Option<i64>,
+    first_read_over: AtomicBool,
     hub_ahead: AtomicBool,
     hub_ahead_reported: AtomicBool,
     status_query_limit: Duration,
@@ -39,10 +41,17 @@ impl<G: Gazette> DiarioPlugin<G> {
     pub fn new(scheduler: Arc<Scheduler<G>>) -> DiarioPlugin<G> {
         DiarioPlugin {
             scheduler,
+            first_read_boundary: None,
+            first_read_over: AtomicBool::new(false),
             hub_ahead: AtomicBool::new(false),
             hub_ahead_reported: AtomicBool::new(false),
             status_query_limit: STATUS_QUERY_LIMIT,
         }
+    }
+
+    pub fn with_first_read_boundary(mut self, boundary: i64) -> DiarioPlugin<G> {
+        self.first_read_boundary = Some(boundary);
+        self
     }
 
     async fn read_events(&self, after: i64, limit: i64) -> Result<Vec<Event>, StoreError> {
@@ -56,7 +65,19 @@ impl<G: Gazette> DiarioPlugin<G> {
         }
         store.ack_alerts(after).await?;
         let alerts = store.alerts_after(after, limit).await?;
-        Ok(alerts.into_iter().map(event).collect())
+        let boundary = self.active_boundary();
+        Ok(alerts
+            .into_iter()
+            .take_while(|alert| boundary.is_none_or(|boundary| alert.seq <= boundary))
+            .map(event)
+            .collect())
+    }
+
+    fn active_boundary(&self) -> Option<i64> {
+        if self.first_read_over.load(Ordering::Relaxed) {
+            return None;
+        }
+        self.first_read_boundary
     }
 
     fn report_hub_ahead(&self, after: i64, last_issued: i64) {
@@ -132,10 +153,11 @@ impl<G: Gazette> Plugin for DiarioPlugin<G> {
         request: Request<EventsRequest>,
     ) -> Result<Response<EventsResponse>, Status> {
         let EventsRequest { after, limit } = request.into_inner();
-        let events = self
-            .read_events(after, effective_limit(limit))
-            .await
-            .map_err(unavailable)?;
+        let limit = effective_limit(limit);
+        let events = self.read_events(after, limit).await.map_err(unavailable)?;
+        if (events.len() as i64) < limit {
+            self.first_read_over.store(true, Ordering::Relaxed);
+        }
         Ok(Response::new(EventsResponse { events }))
     }
 }

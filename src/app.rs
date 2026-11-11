@@ -20,16 +20,19 @@ use crate::timestamp::system_clock;
 const START_UP_LIMIT: Duration = Duration::from_secs(45);
 const LOCK_LOST: &str = "the database lock was lost";
 
-pub async fn run() -> anyhow::Result<()> {
-    let config = Config::from_env(Utc::now())?;
-    let (lock, monitor) = start_up(&config, START_UP_LIMIT).await?;
-    serve_until_stopped(lock, monitor).await
+struct Started {
+    lock: WriterLock,
+    monitor: Monitor<Client>,
+    first_read_boundary: i64,
 }
 
-async fn start_up(
-    config: &Config,
-    limit: Duration,
-) -> anyhow::Result<(WriterLock, Monitor<Client>)> {
+pub async fn run() -> anyhow::Result<()> {
+    let config = Config::from_env(Utc::now())?;
+    let started = start_up(&config, START_UP_LIMIT).await?;
+    serve_until_stopped(started).await
+}
+
+async fn start_up(config: &Config, limit: Duration) -> anyhow::Result<Started> {
     let deadline = Instant::now() + limit;
     within(deadline, limit, "checking pdftotext", check_pdftotext()).await?;
     let mut lock = within(
@@ -49,6 +52,13 @@ async fn start_up(
     .await?;
     info!(versions = ?applied, "database migrations applied");
     let store = Store::new(&config.database_url).context("opening the database pool")?;
+    let first_read_boundary = within(
+        deadline,
+        limit,
+        "reading the last issued alert",
+        store.last_issued_seq(),
+    )
+    .await?;
     let gazette = Client::new(config.gazette_api_url.clone(), HTTP_TIMEOUT)
         .context("building the gazette client")?;
     let monitor = Monitor::new(store, gazette, monitor_options(config));
@@ -59,7 +69,11 @@ async fn start_up(
         monitor.prepare(),
     )
     .await?;
-    Ok((lock, monitor))
+    Ok(Started {
+        lock,
+        monitor,
+        first_read_boundary,
+    })
 }
 
 async fn within<T, E>(
@@ -86,11 +100,18 @@ fn monitor_options(config: &Config) -> MonitorOptions {
     }
 }
 
-async fn serve_until_stopped(mut lock: WriterLock, monitor: Monitor<Client>) -> anyhow::Result<()> {
+async fn serve_until_stopped(started: Started) -> anyhow::Result<()> {
+    let Started {
+        mut lock,
+        monitor,
+        first_read_boundary,
+    } = started;
     let scheduler = Scheduler::new(Arc::new(monitor));
-    let cycles = tokio::spawn(Arc::clone(&scheduler).run());
+    let plugin =
+        DiarioPlugin::new(Arc::clone(&scheduler)).with_first_read_boundary(first_read_boundary);
+    let cycles = tokio::spawn(scheduler.run());
     let ended = tokio::select! {
-        served = serve(DiarioPlugin::new(scheduler)) => served.context("serving the plugin"),
+        served = serve(plugin) => served.context("serving the plugin"),
         () = lock.closed() => Err(lock_lost(&lock)),
     };
     cycles.abort();
