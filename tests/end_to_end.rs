@@ -1,5 +1,6 @@
 mod support;
 
+use std::path::Path;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -7,11 +8,16 @@ use diario_alerr::domain::Alert;
 use diario_alerr::gazette::{Client, HTTP_TIMEOUT};
 use diario_alerr::monitor::{CycleOutcome, Monitor, MonitorOptions};
 use diario_alerr::store::{EditionRecord, SequencedAlert, Store};
+use monitor_hub_plugin::proto::{Event, EventsRequest, EventsResponse};
 use tokio::time::Instant;
 use tokio_postgres::NoTls;
+use tonic::Request;
+use tonic::client::Grpc;
+use tonic::codegen::http::uri::PathAndQuery;
+use tonic::transport::Endpoint;
+use tonic_prost::ProstCodec;
 
 use support::gazette_site::{GazetteSite, SiteEdition};
-use support::grpc::{EventSummary, events};
 use support::process::spawn_plugin;
 use support::{fixed_clock, migrated_database, require_pdftotext, utc};
 
@@ -162,7 +168,26 @@ async fn wait_for_alert(url: &str, id: &str) {
     }
 }
 
-fn ids(events: &[EventSummary]) -> Vec<&str> {
+async fn events(socket: &Path, after: i64, limit: i32) -> Vec<Event> {
+    let channel = Endpoint::from_shared(format!("unix:{}", socket.display()))
+        .expect("a socket endpoint")
+        .connect()
+        .await
+        .expect("connect to the plugin");
+    let mut grpc = Grpc::new(channel);
+    grpc.ready().await.expect("the channel is ready");
+    grpc.unary(
+        Request::new(EventsRequest { after, limit }),
+        PathAndQuery::from_static("/monitorhub.plugin.v1.Plugin/Events"),
+        ProstCodec::<EventsRequest, EventsResponse>::default(),
+    )
+    .await
+    .expect("events")
+    .into_inner()
+    .events
+}
+
+fn ids(events: &[Event]) -> Vec<&str> {
     events.iter().map(|event| event.id.as_str()).collect()
 }
 
@@ -204,14 +229,9 @@ async fn the_hubs_first_read_leaves_the_first_cycle_for_the_next_one() {
     ]);
 
     wait_for_alert(&db.url, "edition-702").await;
-    let socket = plugin.socket.clone();
-    let (first, second) = tokio::task::spawn_blocking(move || {
-        let first = events(&socket, 0, 500);
-        let last = first.last().expect("history").seq;
-        (first, events(&socket, last, 500))
-    })
-    .await
-    .expect("read the events");
+    let first = events(&plugin.socket, 0, 500).await;
+    let last = first.last().expect("history").seq;
+    let second = events(&plugin.socket, last, 500).await;
 
     assert_eq!(ids(&first), ["welcome", "edition-701"]);
     assert_eq!(ids(&second), ["edition-702"]);

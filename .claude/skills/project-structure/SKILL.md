@@ -97,9 +97,8 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
   `mod.rs` carries `#![allow(dead_code)]` because no single test file uses all of it. One file per
   subject: `gazette_site.rs` (fake WordPress site), `pdf.rs` (a hand-written PDF),
   `fake_gazette.rs` (a `Gazette` for cycle tests), `process.rs` (starts the binary, reads the
-  handshake, sends signals), `grpc.rs` (calls `Events` on the running binary over its socket),
-  `channels.rs` (fake ntfy and Telegram, used only by the Go release) and `go.rs` (builds the Go
-  release from the tag `v1.0.0`).
+  handshake, sends signals), `channels.rs` (fake ntfy and Telegram, used only by the Go release)
+  and `go.rs` (builds the Go release from the tag `v1.0.0`).
 - Database tests get a database from `support::migrated_database()`, or from the test kit's
   `database()` when the test migrates by itself.
 - A test that needs something outside the crate (Postgres, `pdftotext`, `sh`, `go`, `git`, the tag
