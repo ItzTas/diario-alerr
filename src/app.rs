@@ -6,7 +6,7 @@ use anyhow::{Context, anyhow};
 use chrono::Utc;
 use monitor_hub_plugin::serve;
 use tokio::time::{Instant, timeout_at};
-use tracing::{error, info};
+use tracing::info;
 
 use crate::config::Config;
 use crate::gazette::{Client, HTTP_TIMEOUT};
@@ -93,8 +93,10 @@ async fn serve_until_stopped(mut lock: WriterLock, monitor: Monitor<Client>) -> 
 }
 
 fn lock_lost(lock: &WriterLock) -> anyhow::Error {
-    error!(reason = lock.close_reason().as_deref(), "{LOCK_LOST}");
-    anyhow!(LOCK_LOST)
+    let Some(reason) = lock.close_reason() else {
+        return anyhow!(LOCK_LOST);
+    };
+    anyhow::Error::msg(reason).context(LOCK_LOST)
 }
 
 #[cfg(test)]
