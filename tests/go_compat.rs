@@ -95,11 +95,28 @@ async fn wait_for(go: &mut RunningService, what: &str, done: impl AsyncFn() -> b
 async fn go_finished_a_cycle(admin: &tokio_postgres::Client) -> bool {
     let row = admin
         .query_one(
-            "SELECT (SELECT count(*) FROM alerts), (SELECT last_success_at IS NOT NULL FROM monitor_state)",
+            "SELECT (SELECT count(*) FROM alerts), (SELECT count(*) FROM alert_deliveries), (SELECT last_success_at IS NOT NULL FROM monitor_state)",
             &[],
         )
         .await;
-    row.is_ok_and(|row| row.get::<_, i64>(0) == 2 && row.get::<_, Option<bool>>(1).unwrap_or(false))
+    row.is_ok_and(|row| {
+        row.get::<_, i64>(0) == 2
+            && row.get::<_, i64>(1) == 2
+            && row.get::<_, Option<bool>>(2).unwrap_or(false)
+    })
+}
+
+async fn deliveries(admin: &tokio_postgres::Client) -> Vec<(String, String, String)> {
+    admin
+        .query(
+            "SELECT alert_id, channel, delivered_at::text FROM alert_deliveries ORDER BY alert_id, channel",
+            &[],
+        )
+        .await
+        .expect("alert_deliveries")
+        .iter()
+        .map(|row| (row.get(0), row.get(1), row.get(2)))
+        .collect()
 }
 
 async fn delivery_channels(admin: &tokio_postgres::Client, alert_id: &str) -> Vec<String> {
@@ -139,16 +156,24 @@ async fn rust_continues_a_database_left_by_go() {
     };
     let site = GazetteSite::start(vec![matching_edition(701, "2026-11-02T10:00:00Z")]).await;
     let admin = connect(&db.url).await;
+    let channels = Channels::start().await;
+    let ntfy_url = channels.ntfy_url();
 
-    let mut release = start_go(&go, &db.url, &site, &[]);
+    let mut release = start_go(&go, &db.url, &site, &[("NTFY_URL", &ntfy_url)]);
     wait_for(
         &mut release,
-        "Go stored two alerts and a successful check",
+        "Go stored two alerts, delivered both on ntfy and recorded a successful check",
         async || go_finished_a_cycle(&admin).await,
     )
     .await;
     let stopped = release.stop();
     assert_eq!(stopped.status.code(), Some(0), "{}", stopped.stdout);
+    let left_by_go = deliveries(&admin).await;
+    let delivered: Vec<(&str, &str)> = left_by_go
+        .iter()
+        .map(|(alert, channel, _)| (alert.as_str(), channel.as_str()))
+        .collect();
+    assert_eq!(delivered, [("edition-701", "ntfy"), ("welcome", "ntfy")]);
 
     site.publish(matching_edition(702, "2026-11-04T10:00:00Z"));
     let mut lock = acquire_writer_lock(&db.url).await.expect("writer lock");
@@ -162,6 +187,7 @@ async fn rust_continues_a_database_left_by_go() {
         alert_ids(&monitor).await,
         ["welcome", "edition-701", "edition-702"]
     );
+    assert_eq!(deliveries(&admin).await, left_by_go);
     assert_eq!(applied_versions(&admin).await, vec![(0, 1), (1, 1), (2, 1)]);
     let last_query = site.queries().pop().expect("a listing query");
     assert!(
