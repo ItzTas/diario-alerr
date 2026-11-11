@@ -62,6 +62,15 @@ pub fn find_terms(pages: &[String], terms: &[String]) -> Option<Hits> {
 }
 
 const SNIPPET_RADIUS: usize = 160;
+const MAX_SHOWN_CHARS: usize = 300;
+const CUT_MARK: char = '…';
+
+pub(crate) fn capped(text: &str) -> String {
+    let Some((cut, _)) = text.char_indices().nth(MAX_SHOWN_CHARS) else {
+        return text.to_owned();
+    };
+    format!("{}{CUT_MARK}", &text[..cut])
+}
 
 fn snippet(text: &str, needle: &str) -> String {
     let start = text

@@ -7,7 +7,7 @@ use serde::{Deserialize, Deserializer};
 use crate::config::go_quote;
 use crate::domain::Edition;
 use crate::pdf::download_pages;
-use crate::text::{Hits, find_terms, normalize};
+use crate::text::{Hits, capped, find_terms, normalize};
 use crate::timestamp::{format_wordpress_time, parse_wordpress_time};
 
 mod html;
@@ -32,7 +32,7 @@ pub enum GazetteError {
     #[error("GET {url}: {status}")]
     Status { url: String, status: StatusCode },
     #[error("decode media list: {0}")]
-    Decode(serde_json::Error),
+    Decode(String),
     #[error("decode media list: {0}")]
     ListingBody(#[source] reqwest::Error),
     #[error("media list: more than {limit} pages")]
@@ -136,25 +136,34 @@ impl Client {
         let response = get(&self.http, url).await?;
         let total_pages = total_pages(&response);
         let body = read_listing(response, max_bytes).await?;
-        let editions = decode_media(&body)
-            .map_err(GazetteError::Decode)?
-            .into_iter()
-            .map(Media::edition)
-            .collect::<Result<_, _>>()?;
-        Ok((editions, total_pages))
+        Ok((editions_in(&body)?, total_pages))
     }
 }
 
 pub(crate) async fn get(http: &reqwest::Client, url: &str) -> Result<Response, GazetteError> {
-    let response = http.get(url).send().await?;
+    let response = http
+        .get(url)
+        .send()
+        .await
+        .map_err(|error| GazetteError::Http(without_long_url(error)))?;
     let status = response.status();
     if status != StatusCode::OK {
         return Err(GazetteError::Status {
-            url: url.to_owned(),
+            url: capped(url),
             status,
         });
     }
     Ok(response)
+}
+
+pub(crate) fn without_long_url(error: reqwest::Error) -> reqwest::Error {
+    let long = error
+        .url()
+        .is_some_and(|url| capped(url.as_str()) != url.as_str());
+    if !long {
+        return error;
+    }
+    error.without_url()
 }
 
 async fn read_listing(mut response: Response, limit: usize) -> Result<Vec<u8>, GazetteError> {
@@ -166,7 +175,11 @@ async fn read_listing(mut response: Response, limit: usize) -> Result<Vec<u8>, G
         return Err(too_large);
     }
     let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(GazetteError::ListingBody)? {
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| GazetteError::ListingBody(without_long_url(error)))?
+    {
         if body.len() + chunk.len() > limit {
             return Err(too_large);
         }
@@ -194,6 +207,14 @@ fn total_pages(response: &Response) -> i64 {
         .unwrap_or(1)
 }
 
+fn editions_in(body: &[u8]) -> Result<Vec<Edition>, GazetteError> {
+    decode_media(body)
+        .map_err(|error| GazetteError::Decode(capped(&error.to_string())))?
+        .into_iter()
+        .map(Media::edition)
+        .collect()
+}
+
 fn decode_media(body: &[u8]) -> Result<Vec<Media>, serde_json::Error> {
     let mut decoder = serde_json::Deserializer::from_slice(body);
     let items = Option::<Vec<Option<Media>>>::deserialize(&mut decoder)?;
@@ -218,7 +239,7 @@ impl Media {
         let Some(published) = parsed.filter(|published| published.year() >= 1) else {
             return Err(GazetteError::Date {
                 edition: self.id,
-                raw: self.date_gmt,
+                raw: capped(&self.date_gmt),
             });
         };
         Ok(Edition {
@@ -300,9 +321,10 @@ mod tests {
 
     use super::{
         Client, GazetteError, HTTP_TIMEOUT, MAX_LISTING_BYTES, MAX_PAGES, decode_media,
-        listing_query,
+        editions_in, listing_query,
     };
     use crate::golden::golden;
+    use crate::store::chain_text;
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -379,6 +401,21 @@ mod tests {
         );
         let first = edition("0001-01-01T00:00:00").unwrap();
         assert_eq!(first.published, utc("0001-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn long_listing_values_are_cut_in_errors() {
+        let long = "9".repeat(100_000);
+        let bodies = [
+            format!(r#"[{{"id": 5, "date_gmt": "{long}"}}]"#),
+            format!(r#"[{{"id": "{long}"}}]"#),
+        ];
+        for body in bodies {
+            let error = editions_in(body.as_bytes()).unwrap_err();
+            let text = chain_text(&error);
+            assert!(text.chars().count() < 1000, "{} characters", text.len());
+            assert!(text.contains(&format!("{}…", "9".repeat(250))), "{text}");
+        }
     }
 
     const EDITION: &str = r#"[{"id": 1, "date_gmt": "2026-11-01T10:00:00"}]"#;

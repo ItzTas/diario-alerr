@@ -135,7 +135,9 @@ and keeps all its state in Postgres. Each PDF is downloaded to a temporary file 
   found the hub ahead of the database. Otherwise it answers `CHECKING` during a cycle, `FAILING`
   with a one-line message when the last cycle did not finish or the database does not answer, and
   `IDLE` otherwise. That message is cut at 300 characters, and so is the `edition` log field,
-  because both can carry text from the gazette site such as an edition title. `Check` starts a cycle now, or
+  because both can carry text from the gazette site such as an edition title. Errors built from
+  gazette data cut that text the same way (a `date_gmt`, a PDF URL, a JSON decoding message), so a
+  logged error stays far below the 64 KiB line the hub keeps. `Check` starts a cycle now, or
   refuses with `a check is already running`.
 - `Events(after, limit)` returns the alerts with a `seq` above `after`, in order, exactly
   `min(limit, available)` of them, except during the first read (next item). A `limit` of 0 means
