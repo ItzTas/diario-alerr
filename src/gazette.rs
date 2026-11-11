@@ -14,7 +14,7 @@ mod html;
 
 pub(crate) use html::html_unescape;
 
-const USER_AGENT: &str = "diario-alerr/2.0";
+const USER_AGENT: &str = concat!("diario-alerr/", env!("CARGO_PKG_VERSION"));
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 const PER_PAGE: u32 = 100;
 const MAX_PAGES: u32 = 100;
@@ -289,7 +289,7 @@ mod tests {
 
     use axum::Router;
     use axum::body::{Body, Bytes};
-    use axum::http::Uri;
+    use axum::http::{HeaderMap, Uri};
     use axum::response::{IntoResponse, Response};
     use axum::routing::get;
     use chrono::{DateTime, Utc};
@@ -474,6 +474,33 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.to_string(), "media list: response larger than 64 KiB");
+    }
+
+    #[tokio::test]
+    async fn requests_name_the_plugin_and_its_version() {
+        let (agents, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let router = Router::new().route(
+            "/",
+            get(move |headers: HeaderMap| async move {
+                let agent = headers.get("user-agent").cloned();
+                agents.send(agent).expect("record the user agent");
+                page("1".to_owned(), "[]")
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+        promptly(
+            Client::new(url, HTTP_TIMEOUT)
+                .unwrap()
+                .list_editions(after()),
+        )
+        .await
+        .unwrap();
+
+        let agent = received.recv().await.expect("a request").expect("a header");
+        assert_eq!(agent, "diario-alerr/2.0.0");
     }
 
     #[test]
