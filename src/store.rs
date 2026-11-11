@@ -328,7 +328,7 @@ fn reason_for(ended: Result<Result<(), tokio_postgres::Error>, JoinError>) -> Op
     }
 }
 
-fn chain_text(error: &(dyn Error + 'static)) -> String {
+pub(crate) fn chain_text(error: &(dyn Error + 'static)) -> String {
     let mut text = error.to_string();
     let mut cause = error.source();
     while let Some(current) = cause {
@@ -392,8 +392,8 @@ mod tests {
     use tokio_postgres::{Client, NoTls};
 
     use super::{
-        Limits, MIGRATIONS, POOL_SIZE, Store, StoreError, acquire_writer_lock, lock_config,
-        pool_config,
+        Limits, MIGRATIONS, POOL_SIZE, Store, StoreError, acquire_writer_lock, chain_text,
+        lock_config, pool_config,
     };
     use crate::domain::Alert;
 
@@ -454,6 +454,28 @@ mod tests {
         assert_eq!(
             config.get_tcp_user_timeout(),
             Some(&Duration::from_secs(60))
+        );
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("connect")]
+    struct Refused;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("send request")]
+    struct Opaque(#[source] Refused);
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("download: {0}")]
+    struct Explained(#[source] Opaque);
+
+    #[test]
+    fn chain_text_shows_each_cause_once() {
+        assert_eq!(chain_text(&Refused), "connect");
+        assert_eq!(chain_text(&Opaque(Refused)), "send request: connect");
+        assert_eq!(
+            chain_text(&Explained(Opaque(Refused))),
+            "download: send request: connect"
         );
     }
 
