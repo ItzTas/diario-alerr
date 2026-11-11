@@ -177,6 +177,37 @@ async fn a_failed_scan_stops_recording_but_every_edition_is_scanned() {
     assert_eq!(fake.max_concurrent_scans(), 2);
 }
 
+#[tokio::test]
+async fn a_failed_record_stops_recording() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let published = utc("2026-11-06T20:00:00Z");
+    let mut editions: Vec<Edition> = (1..=3)
+        .map(|id| edition(id, published + TimeDelta::hours(id)))
+        .collect();
+    editions[1].title = "ED \0 2".to_owned();
+    let fake = FakeGazette::new(editions);
+    for id in 1..=3 {
+        fake.with_hits(id, hits_on(1));
+    }
+    let monitor = prepared(&db.url, fake.clone()).await;
+
+    let outcome = monitor.run_cycle().await;
+
+    let CycleOutcome::Incomplete(problem) = outcome else {
+        panic!("the cycle completed");
+    };
+    assert!(
+        problem.starts_with("could not record edition ED \0 2: "),
+        "{problem:?}"
+    );
+    assert_eq!(fake.scans(), 3);
+    assert_eq!(seen(&monitor, &[1, 2, 3]).await, [1]);
+    assert_eq!(monitor.store().last_success().await.unwrap(), None);
+    assert_eq!(ids(&alerts(&monitor).await), ["welcome", "edition-1"]);
+}
+
 struct LaterEditionsScanFaster {
     inner: FakeGazette,
 }
@@ -204,7 +235,7 @@ impl Gazette for LaterEditionsScanFaster {
 }
 
 #[tokio::test]
-async fn alerts_are_recorded_in_edition_order_even_when_later_scans_finish_first() {
+async fn scan_results_reach_their_own_editions_when_later_scans_finish_first() {
     let Some(db) = migrated_database().await else {
         return;
     };
