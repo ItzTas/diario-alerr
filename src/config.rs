@@ -143,7 +143,7 @@ fn parse_start_after(raw: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, Con
         .ok_or_else(|| ConfigError::InvalidStartAfter(raw.to_owned()))
 }
 
-fn go_quote(raw: &str) -> String {
+pub(crate) fn go_quote(raw: &str) -> String {
     let mut quoted = String::from("\"");
     for c in raw.chars() {
         push_go_escaped(&mut quoted, c);
