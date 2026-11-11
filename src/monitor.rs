@@ -44,6 +44,8 @@ pub struct Monitor<G> {
     store: Store,
     gazette: G,
     options: MonitorOptions,
+    keep_seen: i64,
+    keep_alerts: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -58,7 +60,16 @@ impl<G: Gazette> Monitor<G> {
             store,
             gazette,
             options,
+            keep_seen: MAX_SEEN,
+            keep_alerts: MAX_ALERTS,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn keeping(mut self, seen: i64, alerts: i64) -> Monitor<G> {
+        self.keep_seen = seen;
+        self.keep_alerts = alerts;
+        self
     }
 
     pub async fn prepare(&self) -> Result<(), StoreError> {
@@ -152,7 +163,7 @@ impl<G: Gazette> Monitor<G> {
     }
 
     async fn prune(&self) {
-        if let Err(failure) = self.store.prune(MAX_SEEN, MAX_ALERTS).await {
+        if let Err(failure) = self.store.prune(self.keep_seen, self.keep_alerts).await {
             error!(error = %describe(&failure), "could not prune old editions and alerts");
         }
     }
@@ -209,7 +220,94 @@ fn describe(failure: &(dyn Error + 'static)) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::describe;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use chrono::{DateTime, Utc};
+    use monitor_hub_plugin::migrate::up;
+    use monitor_hub_plugin_testkit::database;
+    use tokio_postgres::NoTls;
+
+    use super::{CycleOutcome, Gazette, Monitor, MonitorOptions, describe};
+    use crate::domain::Edition;
+    use crate::gazette::GazetteError;
+    use crate::store::{MIGRATIONS, Store};
+    use crate::text::Hits;
+
+    struct EveryEditionMatches(Vec<Edition>);
+
+    impl Gazette for EveryEditionMatches {
+        async fn list_editions(&self, _after: DateTime<Utc>) -> Result<Vec<Edition>, GazetteError> {
+            Ok(self.0.clone())
+        }
+
+        async fn scan(
+            &self,
+            _edition: &Edition,
+            terms: &[String],
+        ) -> Result<Option<Hits>, GazetteError> {
+            Ok(Some(Hits {
+                pages: HashMap::from([(terms[0].clone(), vec![1])]),
+                order: terms.to_vec(),
+                first_page: 1,
+                snippet: "S".to_owned(),
+            }))
+        }
+    }
+
+    fn utc(raw: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(raw)
+            .expect("timestamp")
+            .to_utc()
+    }
+
+    #[tokio::test]
+    async fn every_cycle_prunes_old_editions_and_acknowledged_alerts() {
+        let Some(db) = database().await else {
+            return;
+        };
+        let (mut client, connection) = tokio_postgres::connect(&db.url, NoTls)
+            .await
+            .expect("connect");
+        tokio::spawn(connection);
+        up(&mut client, MIGRATIONS).await.expect("migrate");
+        let editions = (1..=4)
+            .map(|id| Edition {
+                id,
+                published: utc("2026-11-06T20:00:00Z"),
+                url: format!("https://x/{id}.pdf"),
+                title: format!("ED {id}"),
+            })
+            .collect();
+        let options = MonitorOptions {
+            terms: vec!["TALES SABINI".to_owned()],
+            interval: Duration::from_secs(30 * 60),
+            start_after: utc("2026-11-01T00:00:00Z"),
+            clock: Arc::new(|| utc("2026-11-09T12:00:00Z")),
+        };
+        let store = Store::new(&db.url).expect("store");
+        let monitor = Monitor::new(store, EveryEditionMatches(editions), options).keeping(2, 1);
+        monitor.prepare().await.expect("prepare");
+        let welcome = monitor.store().last_issued_seq().await.expect("seq");
+        monitor.store().ack_alerts(welcome).await.expect("ack");
+
+        assert_eq!(monitor.run_cycle().await, CycleOutcome::Complete);
+
+        let mut seen = monitor
+            .store()
+            .seen_editions(&[1, 2, 3, 4])
+            .await
+            .expect("seen");
+        seen.sort_unstable();
+        assert_eq!(seen, [3, 4]);
+        let alerts = monitor.store().alerts_after(0, 100).await.expect("alerts");
+        let ids: Vec<&str> = alerts
+            .iter()
+            .map(|stored| stored.alert.id.as_str())
+            .collect();
+        assert_eq!(ids, ["edition-1", "edition-2", "edition-3", "edition-4"]);
+    }
 
     #[derive(Debug, thiserror::Error)]
     #[error("connect")]
