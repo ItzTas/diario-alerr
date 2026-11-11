@@ -1,9 +1,10 @@
+use std::error::Error;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use deadpool_postgres::{Manager, Pool, PoolError, Runtime, TimeoutType};
 use monitor_hub_plugin::migrate::{MigrateError, Migration, up};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinError, JoinHandle};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, NoTls, Row, Transaction};
 
@@ -60,6 +61,10 @@ WHERE seq <= (SELECT acked_seq FROM monitor_state)
   AND seq NOT IN (SELECT seq FROM alerts ORDER BY seq DESC LIMIT $1)";
 const ALERTS_AFTER: &str = "SELECT seq, id, title, link, body, published_at FROM alerts WHERE seq > $1 ORDER BY seq LIMIT $2";
 const ACK_ALERTS: &str = "UPDATE monitor_state SET acked_seq = GREATEST(acked_seq, $1)";
+const LAST_ISSUED_SEQ: &str = "SELECT GREATEST(
+    (SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM alerts_seq_seq),
+    (SELECT COALESCE(max(seq), 0) FROM alerts)
+)";
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -120,6 +125,7 @@ struct Limits {
 pub struct WriterLock {
     client: Client,
     connection: Option<JoinHandle<Result<(), tokio_postgres::Error>>>,
+    close_reason: Option<String>,
 }
 
 pub async fn acquire_writer_lock(database_url: &str) -> Result<WriterLock, StoreError> {
@@ -138,6 +144,7 @@ pub async fn acquire_writer_lock(database_url: &str) -> Result<WriterLock, Store
     Ok(WriterLock {
         client,
         connection: Some(connection),
+        close_reason: None,
     })
 }
 
@@ -150,8 +157,13 @@ impl WriterLock {
         let Some(connection) = self.connection.as_mut() else {
             return;
         };
-        let _ended = connection.await;
+        let ended = connection.await;
+        self.close_reason = reason_for(ended);
         self.connection = None;
+    }
+
+    pub fn close_reason(&self) -> Option<String> {
+        self.close_reason.clone()
     }
 }
 
@@ -259,6 +271,11 @@ impl Store {
         Ok(rows.iter().map(sequenced_alert).collect::<Result<_, _>>()?)
     }
 
+    pub async fn last_issued_seq(&self) -> Result<i64, StoreError> {
+        let row = self.client().await?.query_one(LAST_ISSUED_SEQ, &[]).await?;
+        Ok(row.try_get(0)?)
+    }
+
     pub async fn ack_alerts(&self, seq: i64) -> Result<(), StoreError> {
         self.client().await?.execute(ACK_ALERTS, &[&seq]).await?;
         Ok(())
@@ -301,6 +318,28 @@ fn lock_config(database_url: &str) -> Result<Config, StoreError> {
 
 fn parse(database_url: &str) -> Result<Config, StoreError> {
     database_url.parse().map_err(|_| StoreError::InvalidUrl)
+}
+
+fn reason_for(ended: Result<Result<(), tokio_postgres::Error>, JoinError>) -> Option<String> {
+    match ended {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(chain_text(&error)),
+        Err(error) => Some(chain_text(&error)),
+    }
+}
+
+fn chain_text(error: &(dyn Error + 'static)) -> String {
+    let mut text = error.to_string();
+    let mut cause = error.source();
+    while let Some(current) = cause {
+        let shown = current.to_string();
+        if !text.ends_with(&shown) {
+            text.push_str(": ");
+            text.push_str(&shown);
+        }
+        cause = current.source();
+    }
+    text
 }
 
 fn pool_error(error: PoolError) -> StoreError {
