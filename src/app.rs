@@ -132,10 +132,49 @@ mod tests {
 
     use tokio::net::TcpListener;
 
-    use super::start_up;
+    use monitor_hub_plugin_testkit::database;
+
+    use super::{START_UP_LIMIT, start_up};
     use crate::config::Config;
     use crate::pdf::tests::pdftotext_available;
     use crate::timestamp::parse_rfc3339;
+
+    fn config(database_url: String) -> Config {
+        Config {
+            database_url,
+            terms: vec!["TALES SABINI".to_owned()],
+            interval: Duration::from_secs(30 * 60),
+            start_after: parse_rfc3339("2026-11-01T00:00:00Z").expect("timestamp"),
+            gazette_api_url: "http://127.0.0.1:9/media".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn on_a_new_database_the_first_read_ends_before_the_welcome() {
+        if !pdftotext_available() {
+            return;
+        }
+        let Some(db) = database().await else {
+            return;
+        };
+
+        let started = start_up(&config(db.url.clone()), START_UP_LIMIT)
+            .await
+            .expect("start-up");
+
+        let stored = started
+            .monitor
+            .store()
+            .alerts_after(0, 10)
+            .await
+            .expect("alerts");
+        let positions: Vec<(i64, &str)> = stored
+            .iter()
+            .map(|stored| (stored.seq, stored.alert.id.as_str()))
+            .collect();
+        assert_eq!(started.first_read_boundary, 0);
+        assert_eq!(positions, [(1, "welcome")]);
+    }
 
     #[tokio::test]
     async fn start_up_stops_at_its_limit_and_names_the_step() {
@@ -150,13 +189,7 @@ mod tests {
                 held.push(socket);
             }
         });
-        let config = Config {
-            database_url: format!("postgres://diario:hunter2@{address}/diario"),
-            terms: vec!["TALES SABINI".to_owned()],
-            interval: Duration::from_secs(30 * 60),
-            start_after: parse_rfc3339("2026-11-01T00:00:00Z").expect("timestamp"),
-            gazette_api_url: "http://127.0.0.1:9/media".to_owned(),
-        };
+        let config = config(format!("postgres://diario:hunter2@{address}/diario"));
 
         let started = Instant::now();
         let Err(error) = start_up(&config, Duration::from_millis(300)).await else {
