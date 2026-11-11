@@ -10,6 +10,8 @@ name = "diario_alerr"
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["now"] }
 thiserror = "2.0.21"
+unicode-normalization = "=0.1.25"
+unicode-properties = { version = "=0.1.4", default-features = false, features = ["general-category"] }
 
 [dev-dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
