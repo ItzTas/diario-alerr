@@ -64,13 +64,15 @@ pub fn find_terms(pages: &[String], terms: &[String]) -> Option<Hits> {
 
 const NUMBER_SEPARATOR: &str = r"[\p{Pd}./\\ ]?";
 const NUMBER_EDGE: &str = r"[^\p{L}\p{N}]";
+const MIDDLE_NAMES: &str = r"(?: \p{L}[\p{L}\p{Pd}'’]*){0,4} ";
 
 fn term_pattern(term: &str) -> Regex {
     let needle = normalize(term);
     if needle.chars().any(char::is_numeric) {
         return registration_pattern(&needle);
     }
-    compiled(&format!("({})", regex::escape(&needle)))
+    let words: Vec<String> = needle.split(' ').map(regex::escape).collect();
+    compiled(&format!("({})", words.join(MIDDLE_NAMES)))
 }
 
 fn registration_pattern(needle: &str) -> Regex {
@@ -153,6 +155,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn find_terms_matches_names_with_middle_names() {
+        let matching = [
+            "Nomear PAULO SANTOS para o cargo",
+            "Nomear PAULO HENRIQUE SANTOS para o cargo",
+            "Exonerar Paulo Henrique de Oliveira Santos, matrícula",
+            "servidora PAULO DAS GRAÇAS DE SOUZA-LIMA SANTOS",
+            "PAULO D'ÁVILA\nSANTOS",
+        ];
+        for text in matching {
+            assert!(hits_for(text, "Paulo Santos").is_some(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn find_terms_keeps_name_words_in_order_and_close() {
+        let missing = [
+            "SANTOS PAULO",
+            "PAULO SILVA 132,61 MARIA SANTOS",
+            "PAULO SILVA, MARIA SANTOS",
+            "PAULO A B C D E SANTOS",
+        ];
+        for text in missing {
+            assert_eq!(hits_for(text, "Paulo Santos"), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn find_terms_snippet_spans_the_middle_names() {
+        let hits = hits_for("Exonerar PAULO HENRIQUE SANTOS do cargo", "Paulo Santos");
+        assert!(hits.is_some_and(|hits| hits.snippet.contains("PAULO HENRIQUE SANTOS")));
     }
 
     #[test]

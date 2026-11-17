@@ -94,7 +94,9 @@ which only the tests set.
 
 - `DATABASE_URL` (required): Postgres address. The plugin connects without TLS.
 - `WATCH_TERMS` (required): comma-separated names or registration numbers. Matching ignores case,
-  accents and repeated whitespace. A term with a digit is a registration number: leading zeros and
+  accents and repeated whitespace. The words of a name match in order with up to four words of
+  letters between them, so `Paulo Santos` also matches `PAULO HENRIQUE DE OLIVEIRA SANTOS`, but
+  a number or a comma in between stops it. A term with a digit is a registration number: leading zeros and
   one `.`, `-`, `/` or space between characters are ignored, so `0034712k` also matches
   `34.712-K` and `34712/K`, but not `134712-K`.
 - `CHECK_INTERVAL_MINUTES` (default 30): a positive decimal number of minutes.
