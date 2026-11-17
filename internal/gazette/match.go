@@ -15,6 +15,7 @@ const (
 	snippetRadius   = 160
 	numberSeparator = `[\p{Pd}./\\ ]?`
 	numberEdge      = `[^\p{L}\p{N}]`
+	middleNames     = `(?: \p{L}[\p{L}\p{Pd}'’]*){0,4} `
 )
 
 type Hits struct {
@@ -63,7 +64,11 @@ func termPattern(term string) *regexp.Regexp {
 	if strings.ContainsFunc(needle, unicode.IsDigit) {
 		return registrationPattern(needle)
 	}
-	return regexp.MustCompile("(" + regexp.QuoteMeta(needle) + ")")
+	words := strings.Split(needle, " ")
+	for i, word := range words {
+		words[i] = regexp.QuoteMeta(word)
+	}
+	return regexp.MustCompile("(" + strings.Join(words, middleNames) + ")")
 }
 
 func registrationPattern(needle string) *regexp.Regexp {

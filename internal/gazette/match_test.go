@@ -63,6 +63,42 @@ func TestFindTermsMatchesRegistrationInAnyFormatting(t *testing.T) {
 	}
 }
 
+func TestFindTermsMatchesNamesWithMiddleNames(t *testing.T) {
+	matching := []string{
+		"Nomear PAULO SANTOS para o cargo",
+		"Nomear PAULO HENRIQUE SANTOS para o cargo",
+		"Exonerar Paulo Henrique de Oliveira Santos, matrícula",
+		"servidora PAULO DAS GRAÇAS DE SOUZA-LIMA SANTOS",
+		"PAULO D'ÁVILA\nSANTOS",
+	}
+	for _, text := range matching {
+		if FindTerms([]string{Normalize(text)}, []string{"Paulo Santos"}) == nil {
+			t.Errorf("Paulo Santos does not match %q", text)
+		}
+	}
+}
+
+func TestFindTermsKeepsNameWordsInOrderAndClose(t *testing.T) {
+	missing := []string{
+		"SANTOS PAULO",
+		"PAULO SILVA 132,61 MARIA SANTOS",
+		"PAULO SILVA, MARIA SANTOS",
+		"PAULO A B C D E SANTOS",
+	}
+	for _, text := range missing {
+		if got := FindTerms([]string{Normalize(text)}, []string{"Paulo Santos"}); got != nil {
+			t.Errorf("Paulo Santos matches %q", text)
+		}
+	}
+}
+
+func TestFindTermsSnippetSpansTheMiddleNames(t *testing.T) {
+	got := FindTerms([]string{Normalize("Exonerar PAULO HENRIQUE SANTOS do cargo")}, []string{"Paulo Santos"})
+	if got == nil || !strings.Contains(got.Snippet, "PAULO HENRIQUE SANTOS") {
+		t.Errorf("hits = %+v, want a snippet with PAULO HENRIQUE SANTOS", got)
+	}
+}
+
 func TestFindTermsKeepsRegistrationWhole(t *testing.T) {
 	missing := []string{
 		"matrícula 134712-K",
