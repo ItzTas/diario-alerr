@@ -94,7 +94,9 @@ which only the tests set.
 
 - `DATABASE_URL` (required): Postgres address. The plugin connects without TLS.
 - `WATCH_TERMS` (required): comma-separated names or registration numbers. Matching ignores case,
-  accents and repeated whitespace.
+  accents and repeated whitespace. A term with a digit is a registration number: leading zeros and
+  one `.`, `-`, `/` or space between characters are ignored, so `0034712k` also matches
+  `34.712-K` and `34712/K`, but not `134712-K`.
 - `CHECK_INTERVAL_MINUTES` (default 30): a positive decimal number of minutes.
 - `START_AFTER`: when the first edition to consider was published. A date (`2006-01-02`), an
   RFC 3339 timestamp, or a timestamp without a zone (`2006-01-02T15:04:05`, read as UTC). Only
