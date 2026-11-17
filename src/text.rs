@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 
@@ -38,9 +39,9 @@ pub fn find_terms(pages: &[String], terms: &[String]) -> Option<Hits> {
     };
     let mut first_match = (0, 0);
     for term in terms {
-        let needle = Needle::new(term);
+        let pattern = term_pattern(term);
         for (index, text) in pages.iter().enumerate() {
-            let Some(location) = needle.locate(text) else {
+            let Some(location) = locate(&pattern, text) else {
                 continue;
             };
             let number = index + 1;
@@ -61,90 +62,43 @@ pub fn find_terms(pages: &[String], terms: &[String]) -> Option<Hits> {
     Some(found)
 }
 
-enum Needle {
-    Name(String),
-    Registration {
-        significant: Vec<char>,
-        skips_zeros: bool,
-    },
+const NUMBER_SEPARATOR: &str = r"[\p{Pd}./\\ ]?";
+const NUMBER_EDGE: &str = r"[^\p{L}\p{N}]";
+
+fn term_pattern(term: &str) -> Regex {
+    let needle = normalize(term);
+    if needle.chars().any(char::is_numeric) {
+        return registration_pattern(&needle);
+    }
+    compiled(&format!("({})", regex::escape(&needle)))
 }
 
-impl Needle {
-    fn new(term: &str) -> Self {
-        let normalized = normalize(term);
-        if !normalized.chars().any(char::is_numeric) {
-            return Self::Name(normalized);
-        }
-        let compact: Vec<char> = normalized.chars().filter(|c| c.is_alphanumeric()).collect();
-        let significant: Vec<char> = compact.iter().copied().skip_while(|&c| c == '0').collect();
-        if significant.is_empty() {
-            return Self::Registration {
-                significant: compact,
-                skips_zeros: false,
-            };
-        }
-        Self::Registration {
-            significant,
-            skips_zeros: true,
-        }
-    }
-
-    fn locate(&self, text: &str) -> Option<(usize, usize)> {
-        match self {
-            Self::Name(needle) => text
-                .find(needle.as_str())
-                .map(|offset| (text[..offset].chars().count(), needle.chars().count())),
-            Self::Registration {
-                significant,
-                skips_zeros,
-            } => locate_registration(text, significant, *skips_zeros),
-        }
-    }
+fn registration_pattern(needle: &str) -> Regex {
+    let compact: String = needle.chars().filter(|c| c.is_alphanumeric()).collect();
+    let trimmed = compact.trim_start_matches('0');
+    let significant = if trimmed.is_empty() {
+        compact.as_str()
+    } else {
+        trimmed
+    };
+    let core = significant
+        .chars()
+        .map(|c| regex::escape(&c.to_string()))
+        .collect::<Vec<_>>()
+        .join(NUMBER_SEPARATOR);
+    compiled(&format!(
+        "(?:^|{NUMBER_EDGE})((?:0{NUMBER_SEPARATOR})*{core})(?:{NUMBER_EDGE}|$)"
+    ))
 }
 
-fn locate_registration(
-    text: &str,
-    significant: &[char],
-    skips_zeros: bool,
-) -> Option<(usize, usize)> {
-    let chars: Vec<char> = text.chars().collect();
-    (0..chars.len())
-        .filter(|&start| start == 0 || !chars[start - 1].is_alphanumeric())
-        .find_map(|start| {
-            registration_end(&chars, start, significant, skips_zeros)
-                .map(|end| (start, end - start))
-        })
+fn compiled(pattern: &str) -> Regex {
+    Regex::new(pattern).expect("a term pattern is built from escaped text")
 }
 
-fn registration_end(
-    chars: &[char],
-    start: usize,
-    significant: &[char],
-    skips_zeros: bool,
-) -> Option<usize> {
-    let mut at = start;
-    while skips_zeros && chars.get(at) == Some(&'0') {
-        at = skip_separator(chars, at + 1);
-    }
-    for (position, &wanted) in significant.iter().enumerate() {
-        if position > 0 {
-            at = skip_separator(chars, at);
-        }
-        if chars.get(at) != Some(&wanted) {
-            return None;
-        }
-        at += 1;
-    }
-    let ends_on_edge = chars.get(at).is_none_or(|c| !c.is_alphanumeric());
-    ends_on_edge.then_some(at)
-}
-
-fn skip_separator(chars: &[char], at: usize) -> usize {
-    let is_separator = chars.get(at).is_some_and(|&c| {
-        matches!(c, '.' | '/' | '\\' | ' ')
-            || c.general_category() == GeneralCategory::DashPunctuation
-    });
-    at + usize::from(is_separator)
+fn locate(pattern: &Regex, text: &str) -> Option<(usize, usize)> {
+    let found = pattern.captures(text)?.get(1)?;
+    let start = text[..found.start()].chars().count();
+    Some((start, found.as_str().chars().count()))
 }
 
 const SNIPPET_RADIUS: usize = 160;
@@ -170,7 +124,7 @@ mod tests {
 
     use serde::Deserialize;
 
-    use super::{Hits, Needle, SNIPPET_RADIUS, find_terms, normalize, snippet};
+    use super::{Hits, SNIPPET_RADIUS, find_terms, locate, normalize, snippet, term_pattern};
     use crate::golden::golden;
 
     fn normalized(pages: &[String]) -> Vec<String> {
@@ -224,7 +178,7 @@ mod tests {
     #[test]
     fn snippet_keeps_chars_intact() {
         let text = format!("{} PAULO SANTOS {}", "º".repeat(300), "–".repeat(300));
-        let location = Needle::new("PAULO SANTOS").locate(&text);
+        let location = locate(&term_pattern("PAULO SANTOS"), &text);
         let got = snippet(&text, location.unwrap_or_default());
         assert!(got.contains("PAULO SANTOS"));
         assert!(got.starts_with('º'));
