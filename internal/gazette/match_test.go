@@ -45,6 +45,46 @@ func TestFindTermsListsEveryPageOfEveryTerm(t *testing.T) {
 	}
 }
 
+func TestFindTermsMatchesRegistrationInAnyFormatting(t *testing.T) {
+	matching := []string{
+		"Classificação: 0034712k PAULO",
+		"matrícula: 34712-K, CPF",
+		"matrícula 34.712/K do cargo",
+		"matrícula 034712 K do cargo",
+		"matrícula 00.034.712–K do cargo",
+		"(34712K)",
+	}
+	for _, text := range matching {
+		for _, term := range []string{"0034712k", "34.712-K"} {
+			if FindTerms([]string{Normalize(text)}, []string{term}) == nil {
+				t.Errorf("term %q does not match %q", term, text)
+			}
+		}
+	}
+}
+
+func TestFindTermsKeepsRegistrationWhole(t *testing.T) {
+	missing := []string{
+		"matrícula 134712-K",
+		"matrícula 347122-K",
+		"matrícula 34712, CPF",
+		"código 34712-KF",
+		"valor de R$ 34.712,00",
+	}
+	for _, text := range missing {
+		if got := FindTerms([]string{Normalize(text)}, []string{"0034712k"}); got != nil {
+			t.Errorf("0034712k matches %q", text)
+		}
+	}
+}
+
+func TestFindTermsSnippetCentersOnFormattedRegistration(t *testing.T) {
+	got := FindTerms([]string{Normalize("Exonerar FULANO, matrícula: 34.712-K, do cargo")}, []string{"0034712k"})
+	if got == nil || !strings.Contains(got.Snippet, "34.712-K") {
+		t.Errorf("hits = %+v, want a snippet with 34.712-K", got)
+	}
+}
+
 func TestFindTermsWithoutMatchReturnsNil(t *testing.T) {
 	if got := FindTerms([]string{Normalize("nada aqui")}, []string{"Paulo Santos"}); got != nil {
 		t.Errorf("FindTerms = %+v, want nil", got)
@@ -53,7 +93,7 @@ func TestFindTermsWithoutMatchReturnsNil(t *testing.T) {
 
 func TestSnippetKeepsRunesIntact(t *testing.T) {
 	text := strings.Repeat("º", 300) + " PAULO SANTOS " + strings.Repeat("–", 300)
-	got := snippet(text, "PAULO SANTOS")
+	got := snippet(text, termPattern("PAULO SANTOS"))
 	if !strings.Contains(got, "PAULO SANTOS") || !strings.HasPrefix(got, "º") || !strings.HasSuffix(got, "–") {
 		t.Errorf("snippet = %q", got)
 	}

@@ -59,7 +59,9 @@ git config core.hooksPath .githooks   # once per clone
 
 - `DATABASE_URL` (required): Postgres address. The schema is migrated at boot.
 - `WATCH_TERMS` (required): comma-separated names or registration numbers. Matching ignores case,
-  accents and repeated whitespace.
+  accents and repeated whitespace. A term with a digit is a registration number: leading zeros and
+  one `.`, `-`, `/` or space between characters are ignored, so `0034712k` also matches
+  `34.712-K` and `34712/K`, but not `134712-K`.
 - `CHECK_INTERVAL_MINUTES` (default 30).
 - `START_AFTER`: date (`2006-01-02`) or RFC 3339 timestamp of the first edition to consider. Only
   used the first time, when the database has no state yet. Default: three days ago.
