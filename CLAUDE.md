@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A monitor-hub plugin. It watches the ALE/RR Official Gazette (the PDF editions published on
 `diarios.al.rr.leg.br`) for a list of names or registration numbers, and records an alert when one
 of them shows up. The hub reads those alerts as events and sends the notifications. The plugin is
-written in Rust on the monitor-hub plugin SDK (`monitor-hub-plugin`, git tag `sdk-rust/v0.1.1`).
+written in Rust on the monitor-hub plugin SDK (`monitor-hub-plugin`, git tag `sdk-rust/v0.3.0`).
 
 The image does not run on its own. It holds `/plugin/plugin.json` and `/plugin/diario-alerr`, and
 the hub's image build copies that directory in. Release `1.0.0` was a standalone Go service; its
@@ -68,7 +68,7 @@ skipping.
   `git archive v1.0.0`, builds it, and caches the binary under `target/tmp/go-v1.0.0/`. A shallow
   clone has no tag, so CI checks out the full history.
 - The conformance command for `tests/conformance.rs`: the binary named by `PLUGIN_CONFORMANCE`,
-  or else `go install` of `plugin-conformance` at the SDK's Go tag `sdk/v0.2.1`, cached under
+  or else `go install` of `plugin-conformance` at the SDK's Go tag `sdk-go/v0.4.0`, cached under
   `~/.cache/monitor-hub/plugin-conformance/`.
 
 The SDK refuses Unix socket paths longer than 100 bytes, so a long `TMPDIR` breaks the tests that
