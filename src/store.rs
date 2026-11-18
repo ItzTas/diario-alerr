@@ -55,7 +55,8 @@ WHERE edition_id NOT IN (
 )";
 const INSERT_ALERT: &str = "INSERT INTO alerts (id, title, link, body, published_at)
 VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (id) DO NOTHING";
+ON CONFLICT (id) DO NOTHING
+RETURNING seq";
 const PRUNE_ALERTS: &str = "DELETE FROM alerts
 WHERE seq <= (SELECT acked_seq FROM monitor_state)
   AND seq NOT IN (SELECT seq FROM alerts ORDER BY seq DESC LIMIT $1)";
@@ -218,7 +219,7 @@ impl Store {
             .collect::<Result<_, _>>()?)
     }
 
-    pub async fn record_edition(&self, record: &EditionRecord) -> Result<(), StoreError> {
+    pub async fn record_edition(&self, record: &EditionRecord) -> Result<Option<i64>, StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         transaction
@@ -227,11 +228,12 @@ impl Store {
         transaction
             .execute(ADVANCE_CURSOR, &[&record.published])
             .await?;
-        if let Some(alert) = &record.alert {
-            insert_alert(&transaction, alert).await?;
-        }
+        let inserted = match &record.alert {
+            Some(alert) => insert_alert(&transaction, alert).await?,
+            None => None,
+        };
         transaction.commit().await?;
-        Ok(())
+        Ok(inserted)
     }
 
     pub async fn mark_success(&self, at: DateTime<Utc>) -> Result<(), StoreError> {
@@ -353,9 +355,12 @@ fn pool_error(error: PoolError) -> StoreError {
     })
 }
 
-async fn insert_alert(transaction: &Transaction<'_>, alert: &Alert) -> Result<(), StoreError> {
-    transaction
-        .execute(
+async fn insert_alert(
+    transaction: &Transaction<'_>,
+    alert: &Alert,
+) -> Result<Option<i64>, StoreError> {
+    let row = transaction
+        .query_opt(
             INSERT_ALERT,
             &[
                 &alert.id,
@@ -366,7 +371,10 @@ async fn insert_alert(transaction: &Transaction<'_>, alert: &Alert) -> Result<()
             ],
         )
         .await?;
-    Ok(())
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    Ok(Some(row.try_get(0)?))
 }
 
 fn sequenced_alert(row: &Row) -> Result<SequencedAlert, tokio_postgres::Error> {

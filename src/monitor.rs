@@ -164,7 +164,8 @@ impl<G: Gazette> Monitor<G> {
             published: edition.published,
             alert: alert_for(edition, hits),
         };
-        self.store.record_edition(&record).await
+        self.store.record_edition(&record).await?;
+        Ok(())
     }
 
     async fn mark_success(&self) {

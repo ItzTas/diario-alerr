@@ -227,6 +227,42 @@ async fn record_edition_moves_the_cursor_forward_only() {
 }
 
 #[tokio::test]
+async fn record_edition_returns_the_seq_of_the_alert_it_inserted() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let store = initialized(&db.url).await;
+
+    let inserted = store
+        .record_edition(&edition(
+            10,
+            start() + hours(1),
+            Some(alert("edition-10", start() + hours(1))),
+        ))
+        .await
+        .expect("record edition 10");
+    let without_alert = store
+        .record_edition(&edition(11, start() + hours(2), None))
+        .await
+        .expect("record edition 11");
+    let repeated = store
+        .record_edition(&edition(
+            12,
+            start() + hours(3),
+            Some(alert("edition-10", start() + hours(3))),
+        ))
+        .await
+        .expect("record edition 12");
+
+    let alerts = all_alerts(&store).await;
+    assert_eq!(ids(&alerts), ["welcome", "edition-10"]);
+    assert_eq!(inserted, Some(alerts[1].seq));
+    assert_eq!(without_alert, None);
+    assert_eq!(repeated, None);
+    assert_eq!(seen(&store, &[10, 11, 12]).await, [10, 11, 12]);
+}
+
+#[tokio::test]
 async fn a_failed_write_applies_nothing() {
     let Some(db) = migrated_database().await else {
         return;
