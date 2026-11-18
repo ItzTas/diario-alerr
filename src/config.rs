@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 
+use crate::text::{TooLong, term_pattern};
 use crate::timestamp::{parse_date, parse_rfc3339, parse_wordpress_time};
 
 const DEFAULT_GAZETTE_API_URL: &str = "https://diarios.al.rr.leg.br/wp-json/wp/v2/media";
@@ -20,6 +21,8 @@ pub enum ConfigError {
     MissingDatabaseUrl,
     #[error("WATCH_TERMS is empty: set at least one name or registration number")]
     MissingTerms,
+    #[error("WATCH_TERMS term {position} ({size}) is too long to match: shorten it")]
+    TermTooLong { position: usize, size: TooLong },
     #[error("CHECK_INTERVAL_MINUTES must be a positive number: {}", go_quote(.0))]
     InvalidInterval(String),
     #[error("START_AFTER must be a date (2006-01-02) or an RFC 3339 timestamp: {}", go_quote(.0))]
@@ -37,6 +40,7 @@ impl Config {
         if terms.is_empty() {
             return Err(ConfigError::MissingTerms);
         }
+        check_terms(&terms)?;
         let interval = parse_interval(&read("CHECK_INTERVAL_MINUTES").unwrap_or_default())?;
         let start_after = parse_start_after(&read("START_AFTER").unwrap_or_default(), now)?;
         let gazette_api_url =
@@ -131,6 +135,16 @@ fn split_terms(raw: &str) -> Vec<String> {
         .filter(|term| !term.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+fn check_terms(terms: &[String]) -> Result<(), ConfigError> {
+    for (index, term) in terms.iter().enumerate() {
+        term_pattern(term).map_err(|size| ConfigError::TermTooLong {
+            position: index + 1,
+            size,
+        })?;
+    }
+    Ok(())
 }
 
 fn parse_start_after(raw: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, ConfigError> {
@@ -391,6 +405,35 @@ mod tests {
         ];
         for (env, message) in cases {
             assert_eq!(error_of(env).as_deref(), Some(message), "{env:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_a_term_too_long_to_match() {
+        let database = ("DATABASE_URL", "postgres://db");
+        let longest_name = vec!["PAULO"; 31].join(" ");
+        let accepted = format!("PAULO SANTOS, {longest_name}");
+        let config = Config::from_lookup(lookup(&[database, ("WATCH_TERMS", &accepted)]), now());
+        assert_eq!(
+            config.map(|config| config.terms).ok(),
+            Some(vec!["PAULO SANTOS".to_owned(), longest_name])
+        );
+
+        let long_name = format!("PAULO SANTOS, {}", vec!["PAULO"; 32].join(" "));
+        let long_registration = "0034712k".repeat(1000);
+        let cases = [
+            (
+                long_name.as_str(),
+                "WATCH_TERMS term 2 (32 words) is too long to match: shorten it",
+            ),
+            (
+                long_registration.as_str(),
+                "WATCH_TERMS term 1 (8000 characters) is too long to match: shorten it",
+            ),
+        ];
+        for (terms, message) in cases {
+            let env = [database, ("WATCH_TERMS", terms)];
+            assert_eq!(error_of(&env).as_deref(), Some(message), "{message}");
         }
     }
 

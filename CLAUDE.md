@@ -108,6 +108,18 @@ which only the tests set.
 The hub also passes `PATH`, `TZ`, `TMPDIR` and `MONITOR_HUB_DATA_DIR`. The plugin ignores `TZ`
 and keeps all its state in Postgres. Each PDF is downloaded to a temporary file in `TMPDIR`.
 
+## Differences from the Go matcher
+
+The Go matcher (`internal/gazette/match.go`, last changed in `764b330`) is the specification for
+`src/text.rs`. The plugin differs from it only in these cases:
+
+- A `WATCH_TERMS` term whose pattern does not fit the `regex` crate's default size limit (10 MiB)
+  is a configuration error, and the plugin does not start. A name reaches the limit at 32 words
+  and a registration number at about 6,750 characters. Go accepts such a term. The error gives the
+  term's position, counting from 1, and its size:
+  `WATCH_TERMS term 2 (32 words) is too long to match: shorten it`. The configuration compiles
+  every pattern once to check it, and the scan compiles them again for each edition, as Go does.
+
 ## Process contract
 
 - The hub starts `diario-alerr plugin` with its cookie variable. Started any other way, the binary

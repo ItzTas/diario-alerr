@@ -95,6 +95,29 @@ fn config_error_exits_before_the_handshake() {
 }
 
 #[test]
+fn a_term_too_long_to_match_exits_before_the_handshake() {
+    let terms = format!("PAULO SANTOS, {}", vec!["PAULO"; 32].join(" "));
+    let exited = run_plugin(
+        &["plugin"],
+        &[
+            COOKIE,
+            ("DATABASE_URL", UNREACHABLE_DATABASE),
+            ("WATCH_TERMS", &terms),
+        ],
+        EXIT_LIMIT,
+    );
+
+    assert_refused_before_the_handshake(&exited);
+    let error = single_error(&exited);
+    assert_eq!(error["@message"], "fatal", "{}", exited.stderr);
+    assert_eq!(
+        error["error"], "WATCH_TERMS term 2 (32 words) is too long to match: shorten it",
+        "{}",
+        exited.stderr
+    );
+}
+
+#[test]
 fn a_missing_pdftotext_stops_the_start_up() {
     let empty = tempfile::tempdir().expect("an empty PATH directory");
 

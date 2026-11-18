@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 
 use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
@@ -39,7 +40,9 @@ pub fn find_terms(pages: &[String], terms: &[String]) -> Option<Hits> {
     };
     let mut first_match = (0, 0);
     for term in terms {
-        let pattern = term_pattern(term);
+        let Ok(pattern) = term_pattern(term) else {
+            continue;
+        };
         for (index, text) in pages.iter().enumerate() {
             let Some(location) = locate(&pattern, text) else {
                 continue;
@@ -66,13 +69,29 @@ const NUMBER_SEPARATOR: &str = r"[\p{Pd}./\\ ]?";
 const NUMBER_EDGE: &str = r"[^\p{L}\p{N}]";
 const MIDDLE_NAMES: &str = r"(?: \p{L}[\p{L}\p{Pd}'’]*){0,4} ";
 
-fn term_pattern(term: &str) -> Regex {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TooLong {
+    Words(usize),
+    Characters(usize),
+}
+
+impl fmt::Display for TooLong {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TooLong::Words(count) => write!(f, "{count} words"),
+            TooLong::Characters(count) => write!(f, "{count} characters"),
+        }
+    }
+}
+
+pub(crate) fn term_pattern(term: &str) -> Result<Regex, TooLong> {
     let needle = normalize(term);
     if needle.chars().any(is_digit) {
-        return registration_pattern(&needle);
+        return Regex::new(&registration_pattern(&needle))
+            .map_err(|_| TooLong::Characters(term.chars().count()));
     }
     let words: Vec<String> = needle.split(' ').map(regex::escape).collect();
-    compiled(&format!("({})", words.join(MIDDLE_NAMES)))
+    Regex::new(&format!("({})", words.join(MIDDLE_NAMES))).map_err(|_| TooLong::Words(words.len()))
 }
 
 fn is_digit(c: char) -> bool {
@@ -90,7 +109,7 @@ fn is_letter_or_digit(c: char) -> bool {
     is_digit(c) || letters.contains(&c.general_category())
 }
 
-fn registration_pattern(needle: &str) -> Regex {
+fn registration_pattern(needle: &str) -> String {
     let compact: String = needle.chars().filter(|&c| is_letter_or_digit(c)).collect();
     let trimmed = compact.trim_start_matches('0');
     let significant = if trimmed.is_empty() {
@@ -103,13 +122,7 @@ fn registration_pattern(needle: &str) -> Regex {
         .map(|c| regex::escape(&c.to_string()))
         .collect::<Vec<_>>()
         .join(NUMBER_SEPARATOR);
-    compiled(&format!(
-        "(?:^|{NUMBER_EDGE})((?:0{NUMBER_SEPARATOR})*{core})(?:{NUMBER_EDGE}|$)"
-    ))
-}
-
-fn compiled(pattern: &str) -> Regex {
-    Regex::new(pattern).expect("a term pattern is built from escaped text")
+    format!("(?:^|{NUMBER_EDGE})((?:0{NUMBER_SEPARATOR})*{core})(?:{NUMBER_EDGE}|$)")
 }
 
 fn locate(pattern: &Regex, text: &str) -> Option<(usize, usize)> {
@@ -141,7 +154,9 @@ mod tests {
 
     use serde::Deserialize;
 
-    use super::{Hits, SNIPPET_RADIUS, find_terms, locate, normalize, snippet, term_pattern};
+    use super::{
+        Hits, SNIPPET_RADIUS, TooLong, find_terms, locate, normalize, snippet, term_pattern,
+    };
     use crate::golden::golden;
 
     fn normalized(pages: &[String]) -> Vec<String> {
@@ -240,6 +255,33 @@ mod tests {
     }
 
     #[test]
+    fn find_terms_matches_the_longest_name_it_accepts() {
+        let name = vec!["PAULO"; 31].join(" ");
+        assert!(hits_for(&name, &name).is_some());
+    }
+
+    #[test]
+    fn find_terms_passes_over_a_term_too_long_to_match() {
+        let name = vec!["PAULO"; 32].join(" ");
+        let hits = find_terms(
+            std::slice::from_ref(&name),
+            &[name.clone(), "PAULO".to_owned()],
+        );
+        assert_eq!(hits.map(|hits| hits.order), Some(vec!["PAULO".to_owned()]));
+    }
+
+    #[test]
+    fn term_pattern_reports_the_size_of_a_term_too_long_to_match() {
+        let name = vec!["PAULO"; 32].join(" ");
+        let registration = "0034712k".repeat(1000);
+        assert_eq!(term_pattern(&name).err(), Some(TooLong::Words(32)));
+        assert_eq!(
+            term_pattern(&registration).err(),
+            Some(TooLong::Characters(8000))
+        );
+    }
+
+    #[test]
     fn find_terms_snippet_centers_on_formatted_registration() {
         let hits = hits_for("Exonerar FULANO, matrícula: 34.712-K, do cargo", "0034712k");
         assert!(hits.is_some_and(|hits| hits.snippet.contains("34.712-K")));
@@ -248,7 +290,7 @@ mod tests {
     #[test]
     fn snippet_keeps_chars_intact() {
         let text = format!("{} PAULO SANTOS {}", "º".repeat(300), "–".repeat(300));
-        let location = locate(&term_pattern("PAULO SANTOS"), &text);
+        let location = locate(&term_pattern("PAULO SANTOS").unwrap(), &text);
         let got = snippet(&text, location.unwrap_or_default());
         assert!(got.contains("PAULO SANTOS"));
         assert!(got.starts_with('º'));
