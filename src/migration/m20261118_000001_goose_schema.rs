@@ -15,7 +15,6 @@ impl MigrationTrait for Migration {
             .map_err(|err| match err {
                 GooseError::Database(err) => err,
                 refused => DbErr::Migration(refused.to_string()),
-            })?;
-        Ok(())
+            })
     }
 }

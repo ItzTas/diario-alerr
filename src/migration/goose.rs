@@ -29,7 +29,7 @@ pub(crate) fn up_section(file: &str) -> &str {
 
 /// Runs the goose files the database has not recorded, as goose would, and records nothing in
 /// `goose_db_version`. A database without that table is new and gets every file.
-pub(crate) async fn catch_up(db: &impl ConnectionTrait) -> Result<Vec<i64>, GooseError> {
+pub(crate) async fn catch_up(db: &impl ConnectionTrait) -> Result<(), GooseError> {
     let recorded = recorded_versions(db).await?;
     let current = recorded.iter().copied().max().unwrap_or(0);
     let pending: Vec<(i64, &str)> = GOOSE_FILES
@@ -39,10 +39,10 @@ pub(crate) async fn catch_up(db: &impl ConnectionTrait) -> Result<Vec<i64>, Goos
     if let Some(&(missing, _)) = pending.iter().find(|(version, _)| *version < current) {
         return Err(GooseError::OutOfOrder { missing, current });
     }
-    for (_, file) in &pending {
+    for (_, file) in pending {
         db.execute_unprepared(up_section(file)).await?;
     }
-    Ok(pending.into_iter().map(|(version, _)| version).collect())
+    Ok(())
 }
 
 async fn recorded_versions(db: &impl ConnectionTrait) -> Result<HashSet<i64>, GooseError> {
