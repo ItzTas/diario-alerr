@@ -12,7 +12,8 @@ written in Rust on the monitor-hub plugin SDK (`monitor-hub-plugin`, git tag `sd
 The image does not run on its own. It holds `/plugin/plugin.json` and `/plugin/diario-alerr`, and
 the hub's image build copies that directory in. Release `1.0.0` was a standalone Go service; its
 code is gone from the tree, and the tag `v1.0.0` stays as the reference for the compatibility
-tests and for rollback.
+tests. The image to go back to is a later build of the Go program: see "Rollback to the Go
+release".
 
 **Before creating or moving a module, test file, migration or any config/scaffolding file, read
 `.claude/skills/project-structure/SKILL.md`.** It holds the full layout and the persistence
