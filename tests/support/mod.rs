@@ -5,6 +5,7 @@ pub mod gazette_site;
 pub mod pdf;
 pub mod postgres;
 pub mod process;
+pub mod schema;
 
 pub use postgres::{Database, database};
 
@@ -18,10 +19,19 @@ use diario_alerr::store::MIGRATIONS;
 use diario_alerr::timestamp::Clock;
 use monitor_hub_plugin::Signals;
 use monitor_hub_plugin::migrate::up;
+use sea_orm::{ConnectOptions, DatabaseConnection};
 use tokio::time::{Instant, sleep, timeout};
 use tokio_postgres::NoTls;
 
 pub const SIGNAL_WAIT: Duration = Duration::from_secs(5);
+
+pub async fn orm(url: &str) -> DatabaseConnection {
+    let mut options = ConnectOptions::new(url);
+    options.sqlx_logging(false);
+    sea_orm::Database::connect(options)
+        .await
+        .expect("connect to the test database through SeaORM")
+}
 
 pub async fn migrated_database() -> Option<Database> {
     let database = database().await?;

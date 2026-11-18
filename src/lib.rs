@@ -7,6 +7,7 @@ pub mod gazette;
 mod golden;
 #[cfg(test)]
 mod logtest;
+pub mod migration;
 pub mod monitor;
 mod pdf;
 #[cfg(test)]
