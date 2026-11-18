@@ -144,7 +144,7 @@ mod tests {
 
     use tokio::net::TcpListener;
 
-    use monitor_hub_plugin_testkit::database;
+    use crate::postgres::database;
 
     use super::{START_UP_LIMIT, start_up};
     use crate::config::Config;

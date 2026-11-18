@@ -9,6 +9,9 @@ mod golden;
 mod logtest;
 pub mod monitor;
 mod pdf;
+#[cfg(test)]
+#[path = "../tests/support/postgres.rs"]
+mod postgres;
 pub mod scheduler;
 pub mod server;
 pub mod store;

@@ -273,9 +273,9 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use crate::postgres::database;
     use chrono::{DateTime, Utc};
     use monitor_hub_plugin::migrate::up;
-    use monitor_hub_plugin_testkit::database;
     use tokio_postgres::NoTls;
 
     use super::{

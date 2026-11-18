@@ -9,11 +9,10 @@ use diario_alerr::store::{
     EditionRecord, MIGRATIONS, SequencedAlert, Store, StoreError, WriterLock, acquire_writer_lock,
 };
 use monitor_hub_plugin::migrate::up;
-use monitor_hub_plugin_testkit::database;
 use tokio::net::TcpListener;
 use tokio_postgres::{Client, NoTls};
 
-use support::migrated_database;
+use support::{database, migrated_database};
 
 const PASSWORD: &str = "hunter2";
 
@@ -691,4 +690,20 @@ async fn silent_servers_time_out_without_showing_the_address() {
         let printed = everything_printed(error);
         assert!(!printed.contains(&address.to_string()), "{printed}");
     }
+}
+
+#[tokio::test]
+async fn test_databases_are_reached_over_tcp() {
+    let Some(database) = database().await else {
+        return;
+    };
+    let (client, connection) = tokio_postgres::connect(&database.url, NoTls)
+        .await
+        .expect("connect to the test database");
+    tokio::spawn(connection);
+    let row = client
+        .query_one("SELECT inet_server_addr() IS NOT NULL", &[])
+        .await
+        .expect("read the server address");
+    assert!(row.get::<_, bool>(0));
 }

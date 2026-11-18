@@ -404,9 +404,9 @@ fn sequenced_alert(row: &Row) -> Result<SequencedAlert, tokio_postgres::Error> {
 mod tests {
     use std::time::{Duration, Instant};
 
+    use crate::postgres::{Database, database};
     use chrono::DateTime;
     use monitor_hub_plugin::migrate::up;
-    use monitor_hub_plugin_testkit::{Database, database};
     use tokio_postgres::{Client, NoTls};
 
     use super::{

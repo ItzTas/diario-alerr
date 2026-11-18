@@ -3,7 +3,10 @@
 pub mod fake_gazette;
 pub mod gazette_site;
 pub mod pdf;
+pub mod postgres;
 pub mod process;
+
+pub use postgres::{Database, database};
 
 use std::env;
 use std::process::{Command, Stdio};
@@ -15,7 +18,6 @@ use diario_alerr::store::MIGRATIONS;
 use diario_alerr::timestamp::Clock;
 use monitor_hub_plugin::Signals;
 use monitor_hub_plugin::migrate::up;
-use monitor_hub_plugin_testkit::{Database, database};
 use tokio::time::{Instant, sleep, timeout};
 use tokio_postgres::NoTls;
 
