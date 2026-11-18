@@ -18,7 +18,7 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 
 ```
 .
-├── Cargo.toml                 # package diario-alerr 2.0.1, edition 2024, lib + bin
+├── Cargo.toml                 # package diario-alerr 2.1.0, edition 2024, lib + bin
 ├── Cargo.lock                 # committed; CI and the image build use --locked
 ├── rust-toolchain.toml        # the SDK's channel at sdk-rust/v0.3.0, with rustfmt and clippy
 ├── plugin.json                # the manifest the hub reads: name diario, command diario-alerr plugin

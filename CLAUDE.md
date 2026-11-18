@@ -86,7 +86,7 @@ reason to edit a vector.
 CI (`.github/workflows/docker.yml`) runs `cargo fmt --check`, clippy and `cargo test --locked`
 against a `postgres:18-alpine` service, with Go 1.27.2 and poppler installed. Then it builds the
 image for amd64 and arm64 and publishes it to `ghcr.io` on every run that is not a pull request:
-pushes to `main`, `v*` tags and manual runs. A `v*` tag gets the version tags (`2.0.1` and `2.0`),
+pushes to `main`, `v*` tags and manual runs. A `v*` tag gets the version tags (`2.1.0` and `2.1`),
 only the default branch moves `latest`, and every image gets a `sha-` tag.
 
 ## Configuration
