@@ -245,7 +245,9 @@ cannot store such an event and would reject every page from then on.
 ## Rollback to the Go release
 
 Stop the plugin, run `sql/rollback/mark-alerts-delivered.sql` against its database, then start
-`ghcr.io/itztas/diario-alerr:1.0.0` on that database. The script marks every stored alert as
-delivered on Telegram and ntfy, so the Go release does not send again what the hub already sent.
-That includes alerts the hub stored but had not delivered yet. After the rollback nobody sends
-those, so look for pending deliveries on the hub before running it.
+`ghcr.io/itztas/diario-alerr:sha-764b330` on that database. That image is the Go program built
+from `main` after `1.0.0`: the same database code, plus the two matching fixes this plugin also
+has. `1.0.0` lacks those fixes, so it would miss mentions the plugin finds. The script marks
+every stored alert as delivered on Telegram and ntfy, so the Go program does not send again what
+the hub already sent. That includes alerts the hub stored but had not delivered yet. After the
+rollback nobody sends those, so look for pending deliveries on the hub before running it.
