@@ -283,6 +283,44 @@ async fn a_failed_catch_up_applies_nothing_and_drops_nothing() {
     );
 }
 
+#[tokio::test]
+async fn a_new_database_whose_catch_up_fails_keeps_none_of_it() {
+    let Some(db) = database().await else {
+        return;
+    };
+    let client = admin(&db.url).await;
+    // Refuses 00002's ALTER TABLE after 00001 has created its tables, so only the first
+    // migration's transaction can take them away again.
+    client
+        .batch_execute(
+            "CREATE FUNCTION refuse_alter_table() RETURNS event_trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                RAISE EXCEPTION 'ALTER TABLE refused by the test';
+            END
+            $$;
+            CREATE EVENT TRIGGER refuse_alter_table ON ddl_command_start
+                WHEN TAG IN ('ALTER TABLE') EXECUTE FUNCTION refuse_alter_table();",
+        )
+        .await
+        .expect("create the event trigger");
+
+    let failed = Migrator::up(&orm(&db.url).await, None)
+        .await
+        .expect_err("the event trigger refuses 00002");
+
+    assert!(
+        failed
+            .to_string()
+            .contains("ALTER TABLE refused by the test"),
+        "{failed}"
+    );
+    assert_eq!(table_names(&client).await, ["seaql_migrations"]);
+    assert_eq!(
+        texts(&client, "SELECT count(*)::text FROM seaql_migrations").await,
+        ["0"]
+    );
+}
+
 async fn a_view_stops_the_drop(table: &str, view: &str) {
     let Some(db) = database().await else {
         return;
