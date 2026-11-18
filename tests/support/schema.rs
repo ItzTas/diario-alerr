@@ -14,8 +14,8 @@ const GOOSE_TABLE: &str = "CREATE TABLE goose_db_version (
 const RECORD_GOOSE_VERSION: &str =
     "INSERT INTO goose_db_version (version_id, is_applied) VALUES ($1, true)";
 
-const COLUMNS: &str = "SELECT json_build_array(table_name, column_name, data_type, is_nullable,
-    column_default, is_identity, identity_generation)::text
+const COLUMNS: &str = "SELECT json_build_array(table_name, ordinal_position, column_name,
+    data_type, is_nullable, column_default, is_identity, identity_generation)::text
 FROM information_schema.columns
 WHERE table_schema = current_schema() AND table_name::text <> ALL($1::text[])";
 const CONSTRAINTS: &str =
