@@ -68,15 +68,30 @@ const MIDDLE_NAMES: &str = r"(?: \p{L}[\p{L}\p{Pd}'’]*){0,4} ";
 
 fn term_pattern(term: &str) -> Regex {
     let needle = normalize(term);
-    if needle.chars().any(char::is_numeric) {
+    if needle.chars().any(is_digit) {
         return registration_pattern(&needle);
     }
     let words: Vec<String> = needle.split(' ').map(regex::escape).collect();
     compiled(&format!("({})", words.join(MIDDLE_NAMES)))
 }
 
+fn is_digit(c: char) -> bool {
+    c.general_category() == GeneralCategory::DecimalNumber
+}
+
+fn is_letter_or_digit(c: char) -> bool {
+    let letters = [
+        GeneralCategory::UppercaseLetter,
+        GeneralCategory::LowercaseLetter,
+        GeneralCategory::TitlecaseLetter,
+        GeneralCategory::ModifierLetter,
+        GeneralCategory::OtherLetter,
+    ];
+    is_digit(c) || letters.contains(&c.general_category())
+}
+
 fn registration_pattern(needle: &str) -> Regex {
-    let compact: String = needle.chars().filter(|c| c.is_alphanumeric()).collect();
+    let compact: String = needle.chars().filter(|&c| is_letter_or_digit(c)).collect();
     let trimmed = compact.trim_start_matches('0');
     let significant = if trimmed.is_empty() {
         compact.as_str()
@@ -201,6 +216,26 @@ mod tests {
         ];
         for text in missing {
             assert_eq!(hits_for(text, "0034712k"), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn find_terms_reads_letters_and_digits_by_general_category() {
+        let matching = [
+            ("34712K\u{1f150}", "MAT 34712K"),
+            ("34712K\u{903}", "MAT 34712K"),
+            ("34712K\u{f2a}", "MAT 34712K"),
+            ("PAULO \u{2180}", "PAULO X \u{2180}"),
+        ];
+        for (term, text) in matching {
+            assert!(hits_for(text, term).is_some(), "{term:?} in {text:?}");
+        }
+        let missing = [
+            ("34712K\u{f2a}", "MAT 34712K\u{f2a}"),
+            ("PAULO \u{2180}", "PAULO-\u{2180}"),
+        ];
+        for (term, text) in missing {
+            assert_eq!(hits_for(text, term), None, "{term:?} in {text:?}");
         }
     }
 
