@@ -425,6 +425,7 @@ mod tests {
     use super::connection::{Limits, POOL_LIMITS, POOL_SIZE, database_options, with_limits};
     use super::{MIGRATIONS, Store, StoreError, acquire_writer_lock, chain_text, lock_config};
     use crate::domain::Alert;
+    use crate::logtest::captured;
 
     const URL: &str = "postgres://diario:hunter2@db.internal:5432/diario";
     const POOL_OPTIONS: &str = "-c tcp_keepalives_idle=30 -c tcp_keepalives_interval=10 -c tcp_keepalives_count=3 -c tcp_user_timeout=60000 -c statement_timeout=20000 -c lock_timeout=5000";
@@ -548,6 +549,8 @@ mod tests {
         let accepted = [
             "postgres://diario:hunter2@db.internal:5432/diario?sslmode=disable",
             "postgresql://diario:hunter2@db.internal/diario",
+            "postgres://diario:hunter2@db.internal/diario?sslnegotiation=postgres&connect_timeout=5&tcp_user_timeout=5&keepalives=1&keepalives_idle=5&keepalives_interval=5&keepalives_retries=3&target_session_attrs=any&channel_binding=disable&load_balance_hosts=disable",
+            "postgres://diario:hunter2@db.internal/diario?options[application_name]=x",
         ];
         for url in accepted {
             let options = database_options(url).expect(url);
@@ -561,6 +564,8 @@ mod tests {
             "mysql://diario:hunter2@db/diario",
             "postgres://diario:hunter2@[bad",
             "postgres://diario:hunter2@db/diario?sslmode=sometimes",
+            "postgres://diario:hunter2@db/diario?sslpassword=x",
+            "postgres://diario:hunter2@db/diario?Password=x",
         ];
         for url in refused {
             assert!(
@@ -568,6 +573,37 @@ mod tests {
                 "{url}"
             );
         }
+    }
+
+    #[test]
+    fn url_query_values_never_reach_the_log() {
+        let value = "s3cr3t-value";
+        let keys = [
+            "sslnegotiation",
+            "connect_timeout",
+            "tcp_user_timeout",
+            "keepalives",
+            "keepalives_idle",
+            "keepalives_interval",
+            "keepalives_retries",
+            "target_session_attrs",
+            "channel_binding",
+            "load_balance_hosts",
+            "sslpassword",
+            "Password",
+            "passfile",
+        ];
+        let events = captured(|| {
+            for key in keys {
+                let _ = database_options(&with_query(URL, &format!("{key}={value}")));
+            }
+        });
+        let leaked: Vec<&(String, String)> = events
+            .iter()
+            .flatten()
+            .filter(|(_, logged)| logged.contains(value))
+            .collect();
+        assert!(leaked.is_empty(), "{leaked:?}");
     }
 
     #[tokio::test]

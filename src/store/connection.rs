@@ -1,6 +1,7 @@
-use std::str::FromStr;
 use std::time::Duration;
 
+// The url crate's type, the one sqlx parses addresses with.
+use reqwest::Url;
 use sea_orm::sqlx::ConnectOptions as _;
 use sea_orm::sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sea_orm::{DatabaseConnection, SqlxPostgresConnector};
@@ -27,7 +28,9 @@ pub(crate) fn database_options(database_url: &str) -> Result<PgConnectOptions, S
     if !documented {
         return Err(StoreError::InvalidUrl);
     }
-    let options = PgConnectOptions::from_str(database_url).map_err(|_| StoreError::InvalidUrl)?;
+    let url = Url::parse(database_url).map_err(|_| StoreError::InvalidUrl)?;
+    let options =
+        PgConnectOptions::from_url(&keys_sqlx_reads(url)?).map_err(|_| StoreError::InvalidUrl)?;
     if options.get_host().contains(',') {
         return Err(StoreError::InvalidUrl);
     }
@@ -41,6 +44,56 @@ pub(crate) fn database_options(database_url: &str) -> Result<PgConnectOptions, S
     Ok(options
         .disable_statement_logging()
         .options(server_keepalives))
+}
+
+// sqlx logs every query key it does not read, value included, so it only gets the keys it reads.
+fn keys_sqlx_reads(mut url: Url) -> Result<Url, StoreError> {
+    let read = [
+        "sslmode",
+        "ssl-mode",
+        "sslrootcert",
+        "ssl-root-cert",
+        "ssl-ca",
+        "sslcert",
+        "ssl-cert",
+        "sslkey",
+        "ssl-key",
+        "statement-cache-capacity",
+        "host",
+        "hostaddr",
+        "port",
+        "dbname",
+        "user",
+        "password",
+        "application_name",
+        "options",
+    ];
+    // Accepted by 2.1's client; sqlx has no equivalent, so they are left out.
+    let left_out = [
+        "sslnegotiation",
+        "connect_timeout",
+        "tcp_user_timeout",
+        "keepalives",
+        "keepalives_idle",
+        "keepalives_interval",
+        "keepalives_retries",
+        "target_session_attrs",
+        "channel_binding",
+        "load_balance_hosts",
+    ];
+    let read_by_sqlx =
+        |key: &str| read.contains(&key) || (key.starts_with("options[") && key.ends_with(']'));
+    let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+    if pairs
+        .iter()
+        .any(|(key, _)| !read_by_sqlx(key) && !left_out.contains(&key.as_str()))
+    {
+        return Err(StoreError::InvalidUrl);
+    }
+    url.set_query(None);
+    url.query_pairs_mut()
+        .extend_pairs(pairs.iter().filter(|(key, _)| read_by_sqlx(key)));
+    Ok(url)
 }
 
 pub(crate) fn with_limits(options: PgConnectOptions, limits: Limits) -> PgConnectOptions {
