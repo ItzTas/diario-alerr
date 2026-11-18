@@ -21,8 +21,9 @@ workflow.
 
 ## Code
 
-- **Do not write comments in the code.** No `//`, `///` or `//!`. Names explain what the code
-  does. Attributes such as `#[cfg(test)]` are not comments.
+- **Comments are short and only where they explain something worth explaining**: a guarantee, a
+  rule that comes from outside, a pointer to this file. Where the code is obvious, write none.
+  Never a comment that repeats the code. Attributes such as `#[cfg(test)]` are not comments.
 - **English everywhere**: identifiers, file names, SQL, logs, error messages, the alert text and
   the docs.
 - Only make `pub` what another module or the integration tests in `tests/` use. Everything else is

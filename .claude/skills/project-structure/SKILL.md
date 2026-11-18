@@ -69,8 +69,9 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 - A subject module owns its types and its error enum (`thiserror`). Move a helper only when a
   second module needs it.
 - `pub` is for what another module or `tests/` uses. The rest is `pub(crate)` or private.
-- No comments in the code. `#[cfg(test)] mod tests` at the bottom of a module is where unit tests
-  go.
+- Comments are short and only where they explain something worth explaining (a guarantee, a rule
+  from outside, a pointer to `CLAUDE.md`). None where the code is obvious, and never one that
+  repeats the code. `#[cfg(test)] mod tests` at the bottom of a module is where unit tests go.
 
 ## Persistence
 
