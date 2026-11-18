@@ -8,18 +8,23 @@ use diario_alerr::domain::Alert;
 use diario_alerr::gazette::{Client, HTTP_TIMEOUT};
 use diario_alerr::monitor::{CycleOutcome, Monitor, MonitorOptions};
 use diario_alerr::store::{EditionRecord, SequencedAlert, Store};
-use monitor_hub_plugin::proto::{Event, EventsRequest, EventsResponse};
-use tokio::time::Instant;
+use monitor_hub_plugin::proto::{
+    CheckRequest, CheckResponse, Event, EventsRequest, EventsResponse, WatchRequest, WatchResponse,
+};
+use tokio::time::{Instant, timeout_at};
 use tokio_postgres::NoTls;
-use tonic::Request;
 use tonic::client::Grpc;
 use tonic::codegen::http::uri::PathAndQuery;
-use tonic::transport::Endpoint;
+use tonic::transport::{Channel, Endpoint};
+use tonic::{Request, Streaming};
 use tonic_prost::ProstCodec;
 
 use support::gazette_site::{GazetteSite, SiteEdition};
 use support::process::spawn_plugin;
-use support::{fixed_clock, migrated_database, require_pdftotext, utc};
+use support::{SIGNAL_WAIT, fixed_clock, migrated_database, require_pdftotext, utc};
+
+const CHECK_ATTEMPTS: usize = 5;
+const ANNOUNCEMENT_WAIT: Duration = Duration::from_secs(20);
 
 fn now() -> DateTime<Utc> {
     utc("2026-11-09T12:00:00Z")
@@ -168,7 +173,7 @@ async fn wait_for_alert(url: &str, id: &str) {
     }
 }
 
-async fn events(socket: &Path, after: i64, limit: i32) -> Vec<Event> {
+async fn grpc(socket: &Path) -> Grpc<Channel> {
     let channel = Endpoint::from_shared(format!("unix:{}", socket.display()))
         .expect("a socket endpoint")
         .connect()
@@ -176,15 +181,106 @@ async fn events(socket: &Path, after: i64, limit: i32) -> Vec<Event> {
         .expect("connect to the plugin");
     let mut grpc = Grpc::new(channel);
     grpc.ready().await.expect("the channel is ready");
-    grpc.unary(
-        Request::new(EventsRequest { after, limit }),
-        PathAndQuery::from_static("/monitorhub.plugin.v1.Plugin/Events"),
-        ProstCodec::<EventsRequest, EventsResponse>::default(),
-    )
-    .await
-    .expect("events")
-    .into_inner()
-    .events
+    grpc
+}
+
+async fn events(socket: &Path, after: i64, limit: i32) -> Vec<Event> {
+    grpc(socket)
+        .await
+        .unary(
+            Request::new(EventsRequest { after, limit }),
+            PathAndQuery::from_static("/monitorhub.plugin.v1.Plugin/Events"),
+            ProstCodec::<EventsRequest, EventsResponse>::default(),
+        )
+        .await
+        .expect("events")
+        .into_inner()
+        .events
+}
+
+async fn watch(socket: &Path) -> Streaming<WatchResponse> {
+    grpc(socket)
+        .await
+        .server_streaming(
+            Request::new(WatchRequest {}),
+            PathAndQuery::from_static("/monitorhub.plugin.v1.Plugin/Watch"),
+            ProstCodec::<WatchRequest, WatchResponse>::default(),
+        )
+        .await
+        .expect("open Watch")
+        .into_inner()
+}
+
+async fn check(socket: &Path) -> CheckResponse {
+    grpc(socket)
+        .await
+        .unary(
+            Request::new(CheckRequest {}),
+            PathAndQuery::from_static("/monitorhub.plugin.v1.Plugin/Check"),
+            ProstCodec::<CheckRequest, CheckResponse>::default(),
+        )
+        .await
+        .expect("check")
+        .into_inner()
+}
+
+async fn next_watch_signal(stream: &mut Streaming<WatchResponse>, deadline: Instant) -> i64 {
+    let limit = deadline.min(Instant::now() + SIGNAL_WAIT);
+    timeout_at(limit, stream.message())
+        .await
+        .expect("a Watch signal in time")
+        .expect("an OK Watch signal")
+        .expect("the Watch call stays open")
+        .latest_seq
+}
+
+async fn signal_after_a_cycle(
+    socket: &Path,
+    stream: &mut Streaming<WatchResponse>,
+    seeded: i64,
+) -> i64 {
+    let deadline = Instant::now() + ANNOUNCEMENT_WAIT;
+    for _ in 0..CHECK_ATTEMPTS {
+        if check(socket).await.accepted {
+            return signal_above(stream, seeded, deadline).await;
+        }
+        let seq = next_watch_signal(stream, deadline).await;
+        if seq != seeded {
+            return seq;
+        }
+    }
+    panic!("the plugin refused {CHECK_ATTEMPTS} checks in a row");
+}
+
+async fn signal_above(
+    stream: &mut Streaming<WatchResponse>,
+    seeded: i64,
+    deadline: Instant,
+) -> i64 {
+    loop {
+        let seq = next_watch_signal(stream, deadline).await;
+        if seq != seeded {
+            return seq;
+        }
+    }
+}
+
+async fn seeded_store(url: &str) -> Store {
+    let cursor = utc("2026-11-02T10:00:00Z");
+    let store = Store::new(url).expect("store");
+    store
+        .initialize(cursor, &alert("welcome", cursor))
+        .await
+        .expect("seed the state");
+    store
+        .record_edition(&EditionRecord {
+            id: 701,
+            published: cursor,
+            alert: Some(alert("edition-701", cursor)),
+        })
+        .await
+        .expect("seed an older alert");
+    store
 }
 
 fn ids(events: &[Event]) -> Vec<&str> {
@@ -199,20 +295,7 @@ async fn the_hubs_first_read_leaves_the_first_cycle_for_the_next_one() {
     let Some(db) = migrated_database().await else {
         return;
     };
-    let cursor = utc("2026-11-02T10:00:00Z");
-    let store = Store::new(&db.url).expect("store");
-    store
-        .initialize(cursor, &alert("welcome", cursor))
-        .await
-        .expect("seed the state");
-    store
-        .record_edition(&EditionRecord {
-            id: 701,
-            published: cursor,
-            alert: Some(alert("edition-701", cursor)),
-        })
-        .await
-        .expect("seed an older alert");
+    seeded_store(&db.url).await;
     let site = GazetteSite::start(vec![site_edition(
         702,
         "2026-11-03T10:00:00Z",
@@ -235,4 +318,45 @@ async fn the_hubs_first_read_leaves_the_first_cycle_for_the_next_one() {
 
     assert_eq!(ids(&first), ["welcome", "edition-701"]);
     assert_eq!(ids(&second), ["edition-702"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_signals_at_once_and_after_each_recorded_alert() {
+    if !require_pdftotext() {
+        return;
+    }
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let store = seeded_store(&db.url).await;
+    let seeded = store.last_issued_seq().await.expect("the seeded seq");
+    let site = GazetteSite::start(vec![]).await;
+    let sockets = tempfile::tempdir().expect("socket directory");
+    let plugin = spawn_plugin(&[
+        ("DATABASE_URL", &db.url),
+        ("WATCH_TERMS", "PAULO SANTOS"),
+        ("GAZETTE_API_URL", &site.api_url()),
+        ("TMPDIR", sockets.path().to_str().expect("a UTF-8 path")),
+    ]);
+
+    let mut stream = watch(&plugin.socket).await;
+    let first = next_watch_signal(&mut stream, Instant::now() + SIGNAL_WAIT).await;
+    assert_eq!(first, seeded);
+
+    site.publish(site_edition(
+        702,
+        "2026-11-03T10:00:00Z",
+        "ED 702",
+        &["Nomeacao de PAULO SANTOS"],
+    ));
+    let announced = signal_after_a_cycle(&plugin.socket, &mut stream, seeded).await;
+
+    let recorded: Vec<(String, i64)> = store
+        .alerts_after(seeded, 10)
+        .await
+        .expect("alerts")
+        .into_iter()
+        .map(|stored| (stored.alert.id, stored.seq))
+        .collect();
+    assert_eq!(recorded, [("edition-702".to_owned(), announced)]);
 }

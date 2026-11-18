@@ -73,6 +73,7 @@ impl<G: Gazette> Scheduler<G> {
         state.running = true;
         state.last_started = Some(self.monitor.now());
         let _served_by_this_cycle = pin!(self.wake.notified()).enable();
+        self.monitor.notifier().status_changed();
     }
 
     async fn cycle(&self) -> CycleOutcome {
@@ -90,6 +91,7 @@ impl<G: Gazette> Scheduler<G> {
             CycleOutcome::Complete => None,
             CycleOutcome::Incomplete(problem) => Some(problem),
         };
+        self.monitor.notifier().status_changed();
     }
 
     async fn wait_for_next(&self) {

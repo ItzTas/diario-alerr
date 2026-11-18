@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, TimeDelta, Utc};
+use monitor_hub_plugin::Notifier;
 use monitor_hub_plugin::proto::plugin_server::Plugin;
 use monitor_hub_plugin::proto::{
     CheckRequest, CheckResponse, DescribeRequest, DescribeResponse, Event, EventKind,
@@ -54,23 +55,44 @@ impl<G: Gazette> DiarioPlugin<G> {
         self
     }
 
-    async fn read_events(&self, after: i64, limit: i64) -> Result<Vec<Event>, StoreError> {
+    async fn read_events(&self, after: i64, limit: i64) -> Result<(Vec<Event>, i64), StoreError> {
         let store = self.scheduler.monitor().store();
         let last_issued = store.last_issued_seq().await?;
         let hub_ahead = after > last_issued;
-        self.hub_ahead.store(hub_ahead, Ordering::Relaxed);
+        self.track_hub_ahead(hub_ahead);
         if hub_ahead {
             self.report_hub_ahead(after, last_issued);
-            return Ok(Vec::new());
+            return Ok((Vec::new(), last_issued));
         }
         store.ack_alerts(after).await?;
         let alerts = store.alerts_after(after, limit).await?;
         let boundary = self.active_boundary();
-        Ok(alerts
+        let events = alerts
             .into_iter()
             .take_while(|alert| boundary.is_none_or(|boundary| alert.seq <= boundary))
             .map(event)
-            .collect())
+            .collect();
+        Ok((events, last_issued))
+    }
+
+    fn track_hub_ahead(&self, hub_ahead: bool) {
+        let was_ahead = self.hub_ahead.swap(hub_ahead, Ordering::Relaxed);
+        if was_ahead == hub_ahead {
+            return;
+        }
+        self.notifier().status_changed();
+    }
+
+    fn end_first_read(&self, last_issued: i64) {
+        let was_over = self.first_read_over.swap(true, Ordering::Relaxed);
+        if was_over || self.first_read_boundary.is_none() {
+            return;
+        }
+        self.notifier().notify(last_issued);
+    }
+
+    fn notifier(&self) -> &Notifier {
+        self.scheduler.monitor().notifier()
     }
 
     fn active_boundary(&self) -> Option<i64> {
@@ -154,9 +176,9 @@ impl<G: Gazette> Plugin for DiarioPlugin<G> {
     ) -> Result<Response<EventsResponse>, Status> {
         let EventsRequest { after, limit } = request.into_inner();
         let limit = effective_limit(limit);
-        let events = self.read_events(after, limit).await.map_err(unavailable)?;
+        let (events, last_issued) = self.read_events(after, limit).await.map_err(unavailable)?;
         if (events.len() as i64) < limit {
-            self.first_read_over.store(true, Ordering::Relaxed);
+            self.end_first_read(last_issued);
         }
         Ok(Response::new(EventsResponse { events }))
     }

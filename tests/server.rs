@@ -22,7 +22,7 @@ use tokio_postgres::{Client, NoTls};
 use tonic::{Code, Request};
 
 use support::fake_gazette::FakeGazette;
-use support::{eventually, fixed_clock, migrated_database, utc};
+use support::{eventually, fixed_clock, migrated_database, pending_signal, utc};
 
 const PATIENCE: Duration = Duration::from_secs(5);
 const UNREACHABLE_DATABASE: &str = "postgres://diario:hunter2@127.0.0.1:1/diario";
@@ -134,6 +134,17 @@ async fn add_alert(url: &str, id: &str) {
 }
 
 async fn started_after_three_alerts(url: &str) -> (DiarioPlugin<FakeGazette>, Vec<i64>) {
+    let (_, plugin, all) = scheduled_after_three_alerts(url).await;
+    (plugin, all)
+}
+
+async fn scheduled_after_three_alerts(
+    url: &str,
+) -> (
+    Arc<Scheduler<FakeGazette>>,
+    DiarioPlugin<FakeGazette>,
+    Vec<i64>,
+) {
     let scheduler = prepared(url, FakeGazette::new(vec![])).await;
     add_alerts(url, 2).await;
     let store = scheduler.monitor().store();
@@ -144,7 +155,7 @@ async fn started_after_three_alerts(url: &str) -> (DiarioPlugin<FakeGazette>, Ve
     let all: Vec<i64> = stored.iter().map(|stored| stored.seq).collect();
     assert_eq!(all.len(), 4);
     assert_eq!(all[2], boundary);
-    (plugin, all)
+    (scheduler, plugin, all)
 }
 
 fn seqs(events: &[Event]) -> Vec<i64> {
@@ -336,6 +347,41 @@ async fn status_fails_while_the_hub_is_ahead_of_the_database() {
 }
 
 #[tokio::test]
+async fn the_hub_falling_ahead_and_back_in_line_signals_the_status() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let scheduler = prepared(&db.url, FakeGazette::new(vec![])).await;
+    let newest = scheduler
+        .monitor()
+        .store()
+        .last_issued_seq()
+        .await
+        .expect("newest seq");
+    let plugin = plugin(&scheduler);
+    let mut signals = scheduler.monitor().notifier().subscribe();
+    signals.latest_seq();
+
+    assert_eq!(page(&plugin, newest + 5, 0).await, []);
+    assert_eq!(pending_signal(&mut signals).await, Some(0));
+    let ahead = status(&plugin).await;
+    assert_eq!(ahead.state, i32::from(State::Failing));
+    assert_eq!(
+        ahead.message,
+        "the hub is ahead of this database: reset the hub's position for this plugin"
+    );
+
+    assert_eq!(page(&plugin, newest + 5, 0).await, []);
+    assert_eq!(pending_signal(&mut signals).await, None);
+
+    assert_eq!(page(&plugin, newest, 0).await, []);
+    assert_eq!(pending_signal(&mut signals).await, Some(0));
+    let in_line = status(&plugin).await;
+    assert_eq!(in_line.state, i32::from(State::Idle));
+    assert_eq!(in_line.message, "");
+}
+
+#[tokio::test]
 async fn the_first_read_holds_only_the_alerts_from_before_the_start() {
     let Some(db) = migrated_database().await else {
         return;
@@ -356,6 +402,32 @@ async fn the_first_read_ends_with_its_first_short_page() {
     assert_eq!(seqs(&page(&plugin, 0, 2).await), all[..2]);
     assert_eq!(seqs(&page(&plugin, all[1], 2).await), all[2..3]);
     assert_eq!(seqs(&page(&plugin, all[2], 2).await), all[3..]);
+}
+
+#[tokio::test]
+async fn the_end_of_the_first_read_signals_the_alerts_it_held() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let (scheduler, plugin, all) = scheduled_after_three_alerts(&db.url).await;
+    let newest = scheduler
+        .monitor()
+        .store()
+        .last_issued_seq()
+        .await
+        .expect("newest seq");
+    assert_eq!(all[3], newest);
+    let mut signals = scheduler.monitor().notifier().subscribe();
+    signals.latest_seq();
+
+    assert_eq!(seqs(&page(&plugin, 0, 2).await), all[..2]);
+    assert_eq!(pending_signal(&mut signals).await, None);
+    assert_eq!(seqs(&page(&plugin, all[1], 2).await), all[2..3]);
+    assert_eq!(pending_signal(&mut signals).await, Some(newest));
+    let late = page(&plugin, all[2], 2).await;
+    let ids: Vec<&str> = late.iter().map(|event| event.id.as_str()).collect();
+    assert_eq!(ids, ["edition-late"]);
+    assert_eq!(pending_signal(&mut signals).await, None);
 }
 
 #[tokio::test]

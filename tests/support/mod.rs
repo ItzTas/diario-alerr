@@ -15,10 +15,13 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use diario_alerr::store::MIGRATIONS;
 use diario_alerr::timestamp::Clock;
+use monitor_hub_plugin::Signals;
 use monitor_hub_plugin::migrate::up;
 use monitor_hub_plugin_testkit::{Database, database};
-use tokio::time::{Instant, sleep};
+use tokio::time::{Instant, sleep, timeout};
 use tokio_postgres::NoTls;
+
+pub const SIGNAL_WAIT: Duration = Duration::from_secs(5);
 
 pub async fn migrated_database() -> Option<Database> {
     let database = database().await?;
@@ -69,4 +72,14 @@ pub async fn eventually(deadline: Instant, what: &str, check: impl Fn() -> bool)
         assert!(Instant::now() < deadline, "timed out waiting until {what}");
         sleep(Duration::from_millis(10)).await;
     }
+}
+
+pub async fn next_signal(signals: &mut Signals) -> i64 {
+    timeout(SIGNAL_WAIT, signals.changed())
+        .await
+        .expect("a signal within 5 seconds")
+}
+
+pub async fn pending_signal(signals: &mut Signals) -> Option<i64> {
+    timeout(Duration::ZERO, signals.changed()).await.ok()
 }

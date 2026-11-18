@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep_until};
 
 use support::fake_gazette::FakeGazette;
-use support::{eventually, fixed_clock, migrated_database, utc};
+use support::{eventually, fixed_clock, migrated_database, next_signal, utc};
 
 const PATIENCE: Duration = Duration::from_secs(5);
 const HALF_HOUR: Duration = Duration::from_secs(30 * 60);
@@ -113,6 +113,46 @@ async fn trigger_starts_a_cycle_and_is_refused_while_one_runs() {
     })
     .await;
     assert!(!scheduler.state().running);
+}
+
+#[tokio::test]
+async fn a_cycle_signals_when_it_starts_and_when_it_ends() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let fake = FakeGazette::new(vec![]);
+    fake.gated();
+    let scheduler = scheduler(&db.url, fake.clone(), HALF_HOUR).await;
+    let mut signals = scheduler.monitor().notifier().subscribe();
+    signals.latest_seq();
+
+    let _running = start(&scheduler);
+
+    next_signal(&mut signals).await;
+    assert!(scheduler.state().running);
+    fake.open_gate();
+    next_signal(&mut signals).await;
+    let finished = scheduler.state();
+    assert!(!finished.running);
+    assert_eq!(finished.problem, None);
+    assert_eq!(finished.last_finished, Some(now()));
+
+    fake.failing_listing();
+    fake.gated();
+    assert!(scheduler.trigger());
+    next_signal(&mut signals).await;
+    assert!(scheduler.state().running);
+    fake.open_gate();
+    next_signal(&mut signals).await;
+    let failed = scheduler.state();
+    assert!(!failed.running);
+    assert!(
+        failed
+            .problem
+            .as_deref()
+            .is_some_and(|problem| problem.starts_with("could not list editions")),
+        "{failed:?}"
+    );
 }
 
 #[tokio::test]

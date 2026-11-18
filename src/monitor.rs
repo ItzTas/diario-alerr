@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use futures_util::stream::{self, StreamExt};
+use monitor_hub_plugin::Notifier;
 use tracing::{error, info, warn};
 
 use crate::alerts::{edition_alert, welcome_alert};
@@ -46,6 +47,7 @@ pub struct Monitor<G> {
     store: Store,
     gazette: G,
     options: MonitorOptions,
+    notifier: Notifier,
     keep_seen: i64,
     keep_alerts: i64,
 }
@@ -62,6 +64,7 @@ impl<G: Gazette> Monitor<G> {
             store,
             gazette,
             options,
+            notifier: Notifier::new(),
             keep_seen: MAX_SEEN,
             keep_alerts: MAX_ALERTS,
         }
@@ -97,6 +100,10 @@ impl<G: Gazette> Monitor<G> {
 
     pub fn store(&self) -> &Store {
         &self.store
+    }
+
+    pub fn notifier(&self) -> &Notifier {
+        &self.notifier
     }
 
     pub fn interval(&self) -> Duration {
@@ -164,7 +171,10 @@ impl<G: Gazette> Monitor<G> {
             published: edition.published,
             alert: alert_for(edition, hits),
         };
-        self.store.record_edition(&record).await?;
+        let Some(seq) = self.store.record_edition(&record).await? else {
+            return Ok(());
+        };
+        self.notifier.notify(seq);
         Ok(())
     }
 
