@@ -71,6 +71,9 @@ skipping.
   or else `go install` of `plugin-conformance` at the SDK's Go tag `sdk-go/v0.4.0`, cached under
   `~/.cache/monitor-hub/plugin-conformance/`.
 
+The tests of the `Watch` signals wait under a bounded `timeout` and never sleep. Most subscribe
+with `Notifier::subscribe` and wait on `changed()`; the end-to-end test reads the `Watch` stream.
+
 The SDK refuses Unix socket paths longer than 100 bytes, so a long `TMPDIR` breaks the tests that
 start the plugin. The same holds for the plugin itself under the hub, where `TMPDIR` is `/tmp`.
 
@@ -164,6 +167,18 @@ The Go matcher (`internal/gazette/match.go`, last changed in `764b330`) is the s
   gazette data cut that text the same way (a `date_gmt`, a PDF URL, a JSON decoding message), so a
   logged error stays far below the 64 KiB line the hub keeps. `Check` starts a cycle now, or
   refuses with `a check is already running`.
+- The plugin serves `Watch` through the SDK's `serve_with_notifier`, so the hub polls it as soon
+  as something changes instead of every 15 s. The plugin signals:
+  - At start, with the newest `seq` that existed at start-up. The SDK sends the current value as
+    the first signal of every `Watch` call.
+  - After each committed edition record that inserted an alert, with that alert's `seq`.
+  - When a cycle starts and when it ends.
+  - When `Events` finds the hub ahead of the database, and when the two agree again.
+  - When the first read ends (below), with the newest `seq` issued.
+
+  The SDK also sends a heartbeat every 30 s. On a signal the hub calls `Describe`, `Status` and
+  sometimes `Events`, but never `Check`, so a signal never makes the plugin call the gazette. A hub
+  without `Watch` polls every 15 s as before.
 - `Events(after, limit)` returns the alerts with a `seq` above `after`, in order, exactly
   `min(limit, available)` of them, except during the first read (next item). A `limit` of 0 means
   100, and the maximum is 500. Each call acknowledges every alert up to `after`, and writes the
@@ -172,12 +187,13 @@ The Go matcher (`internal/gazette/match.go`, last changed in `764b330`) is the s
   returns a page shorter than its limit, which is how the hub sees the end of a read, `Events`
   leaves out every newer alert. After that call nothing is left out. This is for the hub's
   baseline: the hub stores the first read of a plugin it does not know and never announces it,
-  and that read comes about 15 s after the start, while the first cycle records its alerts in a
+  and that read comes right after the plugin's process starts, on its first `Watch` signal (about
+  15 s after the start on a hub without `Watch`), while the first cycle records its alerts in a
   few seconds. Without the limit, whatever the first cycle finds would be absorbed as history; on
   a take-over from the Go release, that means every edition Go had not recorded yet. With it, those
-  alerts go out on the next poll as normal events. A hub that already knows the plugin gets them
-  one poll (15 s) later. On a new database the welcome alert is newer than that `seq`, so the hub
-  announces it.
+  alerts go out as normal events right after the first read ends, because the plugin signals the
+  hub then. A hub without `Watch` gets them one poll (15 s) later. On a new database the welcome
+  alert is newer than that `seq`, so the hub announces it.
 - That limit belongs to one process. If the plugin restarts, alone or with the hub, after its first
   cycle recorded alerts and before the hub's first read finished, the new process counts those
   alerts as history: its boundary includes them and the baseline absorbs them. The same happens
