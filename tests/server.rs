@@ -26,6 +26,7 @@ use support::{eventually, fixed_clock, migrated_database, pending_signal, utc};
 
 const PATIENCE: Duration = Duration::from_secs(5);
 const UNREACHABLE_DATABASE: &str = "postgres://diario:hunter2@127.0.0.1:1/diario";
+const CONNECTION_LIMIT: Duration = Duration::from_secs(10);
 
 fn now() -> DateTime<Utc> {
     utc("2026-11-09T12:00:00Z")
@@ -509,7 +510,9 @@ async fn a_cycle_stopped_by_the_database_shows_the_fixed_phrase() {
     let plugin = plugin(&scheduler);
     let cycles = tokio::spawn(Arc::clone(&scheduler).run());
 
-    eventually(Instant::now() + PATIENCE, "the first cycle fails", || {
+    // A refused connection is retried up to the limit, once for the listing and once for pruning.
+    let refused_until = Instant::now() + 2 * CONNECTION_LIMIT;
+    eventually(refused_until + PATIENCE, "the first cycle fails", || {
         let state = scheduler.state();
         !state.running && state.problem.is_some()
     })

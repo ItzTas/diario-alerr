@@ -1,14 +1,23 @@
+mod connection;
+mod entity;
+
 use std::error::Error;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use deadpool_postgres::{Manager, Pool, PoolError, Runtime, TimeoutType};
 use monitor_hub_plugin::migrate::{MigrateError, Migration, up};
+use sea_orm::sea_query::{Expr, ExprTrait, OnConflict, PgFunc};
+use sea_orm::{
+    ActiveValue::Set, ColumnTrait, ConnAcquireErr, ConnectionTrait, DatabaseConnection,
+    DatabaseTransaction, DbBackend, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    RuntimeErr, Statement, TransactionTrait, TryInsertResult, Value,
+};
 use tokio::task::{JoinError, JoinHandle};
-use tokio_postgres::error::SqlState;
-use tokio_postgres::{Client, Config, NoTls, Row, Transaction};
+use tokio_postgres::{Client, Config, NoTls};
 
 use crate::domain::Alert;
+use connection::{CONNECT_TIMEOUT, Limits, POOL_LIMITS, database_options, pool};
+use entity::{alerts, monitor_state, seen_editions};
 
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -25,12 +34,6 @@ pub const MIGRATIONS: &[Migration] = &[
 
 pub const WRITER_LOCK_ID: i64 = 0x6469_6172_696f;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const POOL_SIZE: usize = 4;
-const POOL_LIMITS: Limits = Limits {
-    statement: Duration::from_secs(20),
-    lock: Duration::from_secs(5),
-};
 const KEEPALIVES_IDLE: Duration = Duration::from_secs(30);
 const KEEPALIVES_INTERVAL: Duration = Duration::from_secs(10);
 const KEEPALIVES_RETRIES: u32 = 3;
@@ -38,30 +41,16 @@ const TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
 
 const TRY_WRITER_LOCK: &str = "SELECT pg_try_advisory_lock($1)";
 
-const CREATE_STATE: &str = "INSERT INTO monitor_state (cursor_at, last_success_at)
-VALUES ($1, NULL)
-ON CONFLICT (singleton) DO NOTHING";
-const CURSOR: &str = "SELECT cursor_at FROM monitor_state";
+// Raw SQL on purpose: this UPDATE locks the state row before the alert's INSERT, so the order of
+// the seq values is the order of the commits.
 const ADVANCE_CURSOR: &str = "UPDATE monitor_state SET cursor_at = GREATEST(cursor_at, $1)";
-const MARK_SUCCESS: &str = "UPDATE monitor_state SET last_success_at = $1";
-const LAST_SUCCESS: &str = "SELECT last_success_at FROM monitor_state";
-const MARK_EDITION_SEEN: &str = "INSERT INTO seen_editions (edition_id) VALUES ($1)
-ON CONFLICT (edition_id) DO NOTHING";
-const SEEN_EDITIONS: &str =
-    "SELECT edition_id FROM seen_editions WHERE edition_id = ANY($1::BIGINT[])";
 const PRUNE_SEEN_EDITIONS: &str = "DELETE FROM seen_editions
 WHERE edition_id NOT IN (
     SELECT edition_id FROM seen_editions ORDER BY edition_id DESC LIMIT $1
 )";
-const INSERT_ALERT: &str = "INSERT INTO alerts (id, title, link, body, published_at)
-VALUES ($1, $2, $3, $4, $5)
-ON CONFLICT (id) DO NOTHING
-RETURNING seq";
 const PRUNE_ALERTS: &str = "DELETE FROM alerts
 WHERE seq <= (SELECT acked_seq FROM monitor_state)
   AND seq NOT IN (SELECT seq FROM alerts ORDER BY seq DESC LIMIT $1)";
-const ALERTS_AFTER: &str = "SELECT seq, id, title, link, body, published_at FROM alerts WHERE seq > $1 ORDER BY seq LIMIT $2";
-const ACK_ALERTS: &str = "UPDATE monitor_state SET acked_seq = $1 WHERE acked_seq < $1";
 const NEWEST_ALERT_SEQ: &str = "SELECT COALESCE(max(seq), 0) FROM alerts";
 const LAST_ISSUED_SEQ: &str = "SELECT GREATEST(
     (SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM alerts_seq_seq),
@@ -79,30 +68,45 @@ pub enum StoreError {
     #[error("{0} timed out")]
     Timeout(&'static str),
     #[error(transparent)]
-    Pool(PoolError),
+    Database(DbErr),
     #[error(transparent)]
-    Database(tokio_postgres::Error),
+    LockConnection(#[from] tokio_postgres::Error),
     #[error(transparent)]
     Migrate(#[from] MigrateError),
 }
 
-impl From<tokio_postgres::Error> for StoreError {
-    fn from(error: tokio_postgres::Error) -> Self {
-        let timeouts = [
-            (SqlState::QUERY_CANCELED, "running a database statement"),
-            (SqlState::LOCK_NOT_AVAILABLE, "waiting for a database lock"),
-        ];
-        let step = error.code().and_then(|code| {
-            timeouts
-                .into_iter()
-                .find(|(timeout, _)| timeout == code)
-                .map(|(_, step)| step)
-        });
-        let Some(step) = step else {
+impl From<DbErr> for StoreError {
+    fn from(error: DbErr) -> Self {
+        let Some(step) = timed_out_step(&error) else {
             return StoreError::Database(error);
         };
         StoreError::Timeout(step)
     }
+}
+
+fn timed_out_step(error: &DbErr) -> Option<&'static str> {
+    if matches!(error, DbErr::ConnectionAcquire(ConnAcquireErr::Timeout)) {
+        return Some("getting a database connection");
+    }
+    let timeouts = [
+        ("57014", "running a database statement"),
+        ("55P03", "waiting for a database lock"),
+    ];
+    let code = sql_state(error)?;
+    timeouts
+        .into_iter()
+        .find(|(timeout, _)| code == *timeout)
+        .map(|(_, step)| step)
+}
+
+fn sql_state(error: &DbErr) -> Option<String> {
+    let (DbErr::Exec(RuntimeErr::SqlxError(error))
+    | DbErr::Query(RuntimeErr::SqlxError(error))
+    | DbErr::Conn(RuntimeErr::SqlxError(error))) = error
+    else {
+        return None;
+    };
+    Some(error.as_database_error()?.code()?.into_owned())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,12 +120,6 @@ pub struct EditionRecord {
 pub struct SequencedAlert {
     pub seq: i64,
     pub alert: Alert,
-}
-
-#[derive(Clone, Copy)]
-struct Limits {
-    statement: Duration,
-    lock: Duration,
 }
 
 pub struct WriterLock {
@@ -171,24 +169,24 @@ impl WriterLock {
 
 #[derive(Clone)]
 pub struct Store {
-    pool: Pool,
+    connection: DatabaseConnection,
 }
 
 impl Store {
     pub fn new(database_url: &str) -> Result<Store, StoreError> {
-        Ok(Store::with_config(pool_config(database_url, POOL_LIMITS)?))
+        Store::with_limits(database_url, POOL_LIMITS)
     }
 
-    fn with_config(config: Config) -> Store {
-        let manager = Manager::new(config, NoTls);
-        let pool = Pool::builder(manager)
-            .max_size(POOL_SIZE)
-            .runtime(Runtime::Tokio1)
-            .create_timeout(Some(CONNECT_TIMEOUT))
-            .wait_timeout(Some(CONNECT_TIMEOUT))
-            .build()
-            .expect("the pool has a runtime for its timeouts");
-        Store { pool }
+    fn with_limits(database_url: &str, limits: Limits) -> Result<Store, StoreError> {
+        let options = connection::with_limits(database_options(database_url)?, limits);
+        Ok(Store {
+            connection: pool(options),
+        })
+    }
+
+    #[cfg(test)]
+    fn connection(&self) -> &DatabaseConnection {
+        &self.connection
     }
 
     pub async fn initialize(
@@ -196,9 +194,21 @@ impl Store {
         cursor: DateTime<Utc>,
         welcome: &Alert,
     ) -> Result<bool, StoreError> {
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        let created = transaction.execute(CREATE_STATE, &[&cursor]).await? > 0;
+        let transaction = self.connection.begin().await?;
+        let state = monitor_state::ActiveModel {
+            cursor_at: Set(cursor),
+            last_success_at: Set(None),
+            ..Default::default()
+        };
+        let created = monitor_state::Entity::insert(state)
+            .on_conflict(
+                OnConflict::column(monitor_state::Column::Singleton)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec_without_returning(&transaction)
+            .await?
+            > 0;
         if created {
             insert_alert(&transaction, welcome).await?;
         }
@@ -207,27 +217,34 @@ impl Store {
     }
 
     pub async fn cursor(&self) -> Result<DateTime<Utc>, StoreError> {
-        let row = self.client().await?.query_opt(CURSOR, &[]).await?;
-        let row = row.ok_or(StoreError::NotInitialized)?;
-        Ok(row.try_get(0)?)
+        let state = monitor_state::Entity::find().one(&self.connection).await?;
+        let state = state.ok_or(StoreError::NotInitialized)?;
+        Ok(state.cursor_at)
     }
 
     pub async fn seen_editions(&self, ids: &[i64]) -> Result<Vec<i64>, StoreError> {
-        let rows = self.client().await?.query(SEEN_EDITIONS, &[&ids]).await?;
-        Ok(rows
-            .iter()
-            .map(|row| row.try_get(0))
-            .collect::<Result<_, _>>()?)
+        let listed = Expr::col(seen_editions::Column::EditionId).eq(PgFunc::any(ids.to_vec()));
+        Ok(seen_editions::Entity::find()
+            .select_only()
+            .column(seen_editions::Column::EditionId)
+            .filter(listed)
+            .into_tuple()
+            .all(&self.connection)
+            .await?)
     }
 
     pub async fn record_edition(&self, record: &EditionRecord) -> Result<Option<i64>, StoreError> {
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
-        transaction
-            .execute(MARK_EDITION_SEEN, &[&record.id])
+        let transaction = self.connection.begin().await?;
+        let seen = seen_editions::ActiveModel {
+            edition_id: Set(record.id),
+            ..Default::default()
+        };
+        seen_editions::Entity::insert(seen)
+            .on_conflict_do_nothing_on([seen_editions::Column::EditionId])
+            .exec_without_returning(&transaction)
             .await?;
         transaction
-            .execute(ADVANCE_CURSOR, &[&record.published])
+            .execute_raw(statement(ADVANCE_CURSOR, [record.published.into()]))
             .await?;
         let inserted = match &record.alert {
             Some(alert) => insert_alert(&transaction, alert).await?,
@@ -238,25 +255,26 @@ impl Store {
     }
 
     pub async fn mark_success(&self, at: DateTime<Utc>) -> Result<(), StoreError> {
-        self.client().await?.execute(MARK_SUCCESS, &[&at]).await?;
+        monitor_state::Entity::update_many()
+            .col_expr(monitor_state::Column::LastSuccessAt, Expr::value(at))
+            .exec(&self.connection)
+            .await?;
         Ok(())
     }
 
     pub async fn last_success(&self) -> Result<Option<DateTime<Utc>>, StoreError> {
-        let row = self.client().await?.query_opt(LAST_SUCCESS, &[]).await?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        Ok(row.try_get(0)?)
+        let state = monitor_state::Entity::find().one(&self.connection).await?;
+        Ok(state.and_then(|state| state.last_success_at))
     }
 
     pub async fn prune(&self, keep_seen: i64, keep_alerts: i64) -> Result<(), StoreError> {
-        let mut client = self.client().await?;
-        let transaction = client.transaction().await?;
+        let transaction = self.connection.begin().await?;
         transaction
-            .execute(PRUNE_SEEN_EDITIONS, &[&keep_seen])
+            .execute_raw(statement(PRUNE_SEEN_EDITIONS, [keep_seen.into()]))
             .await?;
-        transaction.execute(PRUNE_ALERTS, &[&keep_alerts]).await?;
+        transaction
+            .execute_raw(statement(PRUNE_ALERTS, [keep_alerts.into()]))
+            .await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -266,55 +284,42 @@ impl Store {
         after: i64,
         limit: i64,
     ) -> Result<Vec<SequencedAlert>, StoreError> {
-        let rows = self
-            .client()
-            .await?
-            .query(ALERTS_AFTER, &[&after, &limit])
+        let rows = alerts::Entity::find()
+            .filter(alerts::Column::Seq.gt(after))
+            .order_by_asc(alerts::Column::Seq)
+            .limit(u64::try_from(limit).unwrap_or(0))
+            .all(&self.connection)
             .await?;
-        Ok(rows.iter().map(sequenced_alert).collect::<Result<_, _>>()?)
+        Ok(rows.into_iter().map(sequenced_alert).collect())
     }
 
     pub async fn last_issued_seq(&self) -> Result<i64, StoreError> {
-        let row = self.client().await?.query_one(LAST_ISSUED_SEQ, &[]).await?;
-        Ok(row.try_get(0)?)
+        self.read_seq(LAST_ISSUED_SEQ).await
     }
 
     pub async fn newest_alert_seq(&self) -> Result<i64, StoreError> {
-        let row = self
-            .client()
-            .await?
-            .query_one(NEWEST_ALERT_SEQ, &[])
-            .await?;
-        Ok(row.try_get(0)?)
+        self.read_seq(NEWEST_ALERT_SEQ).await
     }
 
     pub async fn ack_alerts(&self, seq: i64) -> Result<(), StoreError> {
-        self.client().await?.execute(ACK_ALERTS, &[&seq]).await?;
+        monitor_state::Entity::update_many()
+            .col_expr(monitor_state::Column::AckedSeq, Expr::value(seq))
+            .filter(monitor_state::Column::AckedSeq.lt(seq))
+            .exec(&self.connection)
+            .await?;
         Ok(())
     }
 
-    async fn client(&self) -> Result<deadpool_postgres::Client, StoreError> {
-        self.pool.get().await.map_err(pool_error)
+    async fn read_seq(&self, sql: &str) -> Result<i64, StoreError> {
+        let read = Statement::from_string(DbBackend::Postgres, sql);
+        let row = self.connection.query_one_raw(read).await?;
+        let row = row.ok_or_else(|| DbErr::RecordNotFound("a sequence read gave no row".into()))?;
+        Ok(row.try_get_by_index(0)?)
     }
 }
 
-fn pool_config(database_url: &str, limits: Limits) -> Result<Config, StoreError> {
-    let mut config = lock_config(database_url)?;
-    let limits = format!(
-        "-c statement_timeout={} -c lock_timeout={}",
-        limits.statement.as_millis(),
-        limits.lock.as_millis()
-    );
-    let options = after_existing(config.get_options(), limits);
-    config.options(options);
-    Ok(config)
-}
-
-fn after_existing(existing: Option<&str>, settings: String) -> String {
-    let Some(existing) = existing.filter(|options| !options.trim().is_empty()) else {
-        return settings;
-    };
-    format!("{existing} {settings}")
+fn statement<const N: usize>(sql: &str, values: [Value; N]) -> Statement {
+    Statement::from_sql_and_values(DbBackend::Postgres, sql, values)
 }
 
 fn lock_config(database_url: &str) -> Result<Config, StoreError> {
@@ -354,50 +359,39 @@ pub(crate) fn chain_text(error: &(dyn Error + 'static)) -> String {
     text
 }
 
-fn pool_error(error: PoolError) -> StoreError {
-    let PoolError::Timeout(kind) = error else {
-        return StoreError::Pool(error);
-    };
-    StoreError::Timeout(match kind {
-        TimeoutType::Wait => "waiting for a free database connection",
-        TimeoutType::Create => "connecting to the database",
-        TimeoutType::Recycle => "checking a pooled database connection",
-    })
-}
-
 async fn insert_alert(
-    transaction: &Transaction<'_>,
+    transaction: &DatabaseTransaction,
     alert: &Alert,
 ) -> Result<Option<i64>, StoreError> {
-    let row = transaction
-        .query_opt(
-            INSERT_ALERT,
-            &[
-                &alert.id,
-                &alert.title,
-                &alert.link,
-                &alert.body,
-                &alert.published,
-            ],
-        )
+    let row = alerts::ActiveModel {
+        id: Set(alert.id.clone()),
+        title: Set(alert.title.clone()),
+        link: Set(alert.link.clone()),
+        body: Set(alert.body.clone()),
+        published_at: Set(alert.published),
+        ..Default::default()
+    };
+    let inserted = alerts::Entity::insert(row)
+        .on_conflict_do_nothing_on([alerts::Column::Id])
+        .exec(transaction)
         .await?;
-    let Some(row) = row else {
+    let TryInsertResult::Inserted(inserted) = inserted else {
         return Ok(None);
     };
-    Ok(Some(row.try_get(0)?))
+    Ok(Some(inserted.last_insert_id))
 }
 
-fn sequenced_alert(row: &Row) -> Result<SequencedAlert, tokio_postgres::Error> {
-    Ok(SequencedAlert {
-        seq: row.try_get(0)?,
+fn sequenced_alert(row: alerts::Model) -> SequencedAlert {
+    SequencedAlert {
+        seq: row.seq,
         alert: Alert {
-            id: row.try_get(1)?,
-            title: row.try_get(2)?,
-            link: row.try_get(3)?,
-            body: row.try_get(4)?,
-            published: row.try_get(5)?,
+            id: row.id,
+            title: row.title,
+            link: row.link,
+            body: row.body,
+            published: row.published_at,
         },
-    })
+    }
 }
 
 #[cfg(test)]
@@ -406,16 +400,17 @@ mod tests {
 
     use crate::postgres::{Database, database};
     use chrono::DateTime;
+    use futures_util::future::try_join_all;
     use monitor_hub_plugin::migrate::up;
+    use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
     use tokio_postgres::{Client, NoTls};
 
-    use super::{
-        Limits, MIGRATIONS, POOL_SIZE, Store, StoreError, acquire_writer_lock, chain_text,
-        lock_config, pool_config,
-    };
+    use super::connection::{Limits, POOL_LIMITS, POOL_SIZE, database_options, with_limits};
+    use super::{MIGRATIONS, Store, StoreError, acquire_writer_lock, chain_text, lock_config};
     use crate::domain::Alert;
 
     const URL: &str = "postgres://diario:hunter2@db.internal:5432/diario";
+    const POOL_OPTIONS: &str = "-c tcp_keepalives_idle=30 -c tcp_keepalives_interval=10 -c tcp_keepalives_count=3 -c tcp_user_timeout=60000 -c statement_timeout=20000 -c lock_timeout=5000";
     const SHORT: Limits = Limits {
         statement: Duration::from_millis(400),
         lock: Duration::from_millis(300),
@@ -435,7 +430,18 @@ mod tests {
         Some(database)
     }
 
-    async fn show(client: &Client, setting: &str) -> String {
+    async fn show(connection: &DatabaseConnection, setting: &str) -> String {
+        let statement = Statement::from_string(DbBackend::Postgres, format!("SHOW {setting}"));
+        connection
+            .query_one_raw(statement)
+            .await
+            .expect("show")
+            .expect("a row")
+            .try_get_by_index(0)
+            .expect("the setting")
+    }
+
+    async fn show_on_client(client: &Client, setting: &str) -> String {
         client
             .query_one(&format!("SHOW {setting}"), &[])
             .await
@@ -498,13 +504,9 @@ mod tests {
     }
 
     #[test]
-    fn pool_connections_get_limits_and_keepalives() {
-        let config = pool_config(URL, super::POOL_LIMITS).expect("config");
-        assert_eq!(
-            config.get_options(),
-            Some("-c statement_timeout=20000 -c lock_timeout=5000")
-        );
-        assert_keepalives(&config);
+    fn pool_connections_get_limits_and_server_keepalives() {
+        let options = with_limits(database_options(URL).expect("options"), POOL_LIMITS);
+        assert_eq!(options.get_options(), Some(POOL_OPTIONS));
     }
 
     #[test]
@@ -516,16 +518,58 @@ mod tests {
 
     #[test]
     fn the_store_settings_come_after_the_urls_own() {
-        let url = with_query(
-            URL,
-            "options=-c%20statement_timeout%3D1&keepalives_idle=5&tcp_user_timeout=1",
-        );
-        let config = pool_config(&url, super::POOL_LIMITS).expect("config");
+        let url = with_query(URL, "options=-c%20statement_timeout%3D1&keepalives_idle=5");
+        let options = with_limits(database_options(&url).expect("options"), POOL_LIMITS);
         assert_eq!(
-            config.get_options(),
-            Some("-c statement_timeout=1 -c statement_timeout=20000 -c lock_timeout=5000")
+            options.get_options(),
+            Some(format!("-c statement_timeout=1 {POOL_OPTIONS}").as_str())
         );
-        assert_keepalives(&config);
+    }
+
+    #[test]
+    fn database_options_accept_only_the_documented_forms() {
+        let accepted = [
+            "postgres://diario:hunter2@db.internal:5432/diario?sslmode=disable",
+            "postgresql://diario:hunter2@db.internal/diario",
+        ];
+        for url in accepted {
+            let options = database_options(url).expect(url);
+            assert_eq!(options.get_host(), "db.internal", "{url}");
+            assert_eq!(options.get_database(), Some("diario"), "{url}");
+        }
+        let refused = [
+            "host=db user=diario dbname=diario",
+            "postgres://diario:hunter2@h1,h2/diario",
+            "postgres://diario:hunter2@h1:5432,h2:5432/diario",
+            "mysql://diario:hunter2@db/diario",
+            "postgres://diario:hunter2@[bad",
+            "postgres://diario:hunter2@db/diario?sslmode=sometimes",
+        ];
+        for url in refused {
+            assert!(
+                matches!(database_options(url), Err(StoreError::InvalidUrl)),
+                "{url}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn pool_connections_carry_their_limits_and_keepalives() {
+        let Some(db) = database().await else {
+            return;
+        };
+        let store = Store::new(&db.url).expect("store");
+        let settings = [
+            ("statement_timeout", "20s"),
+            ("lock_timeout", "5s"),
+            ("tcp_keepalives_idle", "30"),
+            ("tcp_keepalives_interval", "10"),
+            ("tcp_keepalives_count", "3"),
+            ("tcp_user_timeout", "60000"),
+        ];
+        for (setting, value) in settings {
+            assert_eq!(show(store.connection(), setting).await, value, "{setting}");
+        }
     }
 
     #[tokio::test]
@@ -533,14 +577,9 @@ mod tests {
         let Some(db) = migrated().await else {
             return;
         };
-        let store = Store::new(&db.url).expect("store");
-        let pooled = store.client().await.expect("pooled connection");
-        assert_eq!(show(&pooled, "statement_timeout").await, "20s");
-        assert_eq!(show(&pooled, "lock_timeout").await, "5s");
-
         let lock = acquire_writer_lock(&db.url).await.expect("lock");
-        assert_eq!(show(&lock.client, "statement_timeout").await, "0");
-        assert_eq!(show(&lock.client, "lock_timeout").await, "0");
+        assert_eq!(show_on_client(&lock.client, "statement_timeout").await, "0");
+        assert_eq!(show_on_client(&lock.client, "lock_timeout").await, "0");
     }
 
     #[tokio::test]
@@ -550,9 +589,8 @@ mod tests {
         };
         let url = with_query(&db.url, "options=-c%20application_name%3Dx");
         let store = Store::new(&url).expect("store");
-        let pooled = store.client().await.expect("pooled connection");
-        assert_eq!(show(&pooled, "application_name").await, "x");
-        assert_eq!(show(&pooled, "statement_timeout").await, "20s");
+        assert_eq!(show(store.connection(), "application_name").await, "x");
+        assert_eq!(show(store.connection(), "statement_timeout").await, "20s");
     }
 
     #[tokio::test]
@@ -560,7 +598,7 @@ mod tests {
         let Some(db) = migrated().await else {
             return;
         };
-        let store = Store::with_config(pool_config(&db.url, SHORT).expect("config"));
+        let store = Store::with_limits(&db.url, SHORT).expect("store");
         store
             .initialize(welcome().published, &welcome())
             .await
@@ -594,6 +632,16 @@ mod tests {
             .expect("cursor");
         assert_eq!(cursor, welcome().published);
 
+        // sqlx takes a dropped call's connection back only once its statement ends, so holding
+        // every connection at once waits for the abandoned calls to end under the held row.
+        let pool = store.connection().get_postgres_connection_pool();
+        let whole_pool = try_join_all((0..POOL_SIZE).map(|_| pool.acquire()));
+        let held = tokio::time::timeout(SHORT.lock + SLACK, whole_pool)
+            .await
+            .expect("the abandoned calls ended within the lock timeout")
+            .expect("every pooled connection");
+        drop(held);
+
         outside.batch_execute("ROLLBACK").await.expect("release");
         store.ack_alerts(7).await.expect("ack once released");
         let acked: i64 = outside
@@ -609,12 +657,12 @@ mod tests {
         let Some(db) = migrated().await else {
             return;
         };
-        let store = Store::with_config(pool_config(&db.url, SHORT).expect("config"));
-        let pooled = store.client().await.expect("pooled connection");
+        let store = Store::with_limits(&db.url, SHORT).expect("store");
+        let sleep = Statement::from_string(DbBackend::Postgres, "SELECT pg_sleep(30)");
         let started = Instant::now();
         let error = tokio::time::timeout(
             SHORT.statement + SLACK,
-            pooled.query_one("SELECT pg_sleep(30)", &[]),
+            store.connection().query_one_raw(sleep),
         )
         .await
         .expect("the server ended the statement within its limit")

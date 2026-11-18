@@ -110,6 +110,11 @@ fn with_login(url: &str, login: &str) -> String {
     format!("{scheme}://{login}@{}", &rest[host_start..])
 }
 
+fn with_query(url: &str, parameter: &str) -> String {
+    let separator = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{separator}{parameter}")
+}
+
 async fn acquire_within(url: &str, limit: Duration) -> WriterLock {
     let started = Instant::now();
     loop {
@@ -632,12 +637,16 @@ async fn refused_connections_never_show_the_password() {
     let Err(error) = acquire_writer_lock(&url).await else {
         panic!("a closed port gave a lock")
     };
-    assert!(matches!(error, StoreError::Database(_)), "{error:?}");
+    assert!(matches!(error, StoreError::LockConnection(_)), "{error:?}");
     assert_hides_the_login(&error, &url);
 
     let store = Store::new(&url).expect("store");
+    let started = Instant::now();
     let error = store.cursor().await.expect_err("a closed port answered");
-    assert!(matches!(error, StoreError::Pool(_)), "{error:?}");
+    let elapsed = started.elapsed();
+    assert!(elapsed < Duration::from_secs(13), "took {elapsed:?}");
+    assert!(matches!(error, StoreError::Timeout(_)), "{error:?}");
+    assert_eq!(error.to_string(), "getting a database connection timed out");
     assert_hides_the_login(&error, &url);
 }
 
@@ -649,7 +658,7 @@ async fn rejected_logins_never_show_the_password() {
     let Err(error) = acquire_writer_lock(&url).await else {
         panic!("an unknown role got a lock")
     };
-    assert!(matches!(error, StoreError::Database(_)), "{error:?}");
+    assert!(matches!(error, StoreError::LockConnection(_)), "{error:?}");
     assert_hides_the_login(&error, &url);
 
     let store = Store::new(&url).expect("store");
@@ -657,7 +666,30 @@ async fn rejected_logins_never_show_the_password() {
         .cursor()
         .await
         .expect_err("an unknown role was let in");
-    assert!(matches!(error, StoreError::Pool(_)), "{error:?}");
+    assert!(matches!(error, StoreError::Database(_)), "{error:?}");
+    assert_hides_the_login(&error, &url);
+}
+
+#[tokio::test]
+async fn a_url_that_requires_tls_is_refused_at_once() {
+    let Some(db) = database().await else { return };
+    let url = with_query(
+        &with_login(&db.url, &format!("diario:{PASSWORD}")),
+        "sslmode=require",
+    );
+    let store = Store::new(&url).expect("store");
+
+    let started = Instant::now();
+    let error = store
+        .cursor()
+        .await
+        .expect_err("an address that requires TLS was let in");
+    let elapsed = started.elapsed();
+
+    assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
+    assert!(matches!(error, StoreError::Database(_)), "{error:?}");
+    let printed = everything_printed(&error);
+    assert!(printed.contains("TLS"), "{printed}");
     assert_hides_the_login(&error, &url);
 }
 
