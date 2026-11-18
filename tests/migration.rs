@@ -397,3 +397,52 @@ async fn running_the_migrations_again_changes_nothing() {
     );
     assert_eq!(texts(&client, recorded).await, before);
 }
+
+#[tokio::test]
+async fn go_tables_in_another_schema_on_the_search_path_are_left_alone() {
+    let Some(db) = database().await else {
+        return;
+    };
+    let setup = admin(&db.url).await;
+    goose_era_database(&setup, &[], &[1, 2]).await;
+    setup
+        .batch_execute(
+            "CREATE TABLE alert_deliveries (alert_id TEXT, channel TEXT);
+            INSERT INTO alert_deliveries VALUES ('another-application', 'email');
+            CREATE SCHEMA diario;",
+        )
+        .await
+        .expect("set up another application's tables in public");
+    let name = texts(&setup, "SELECT current_database()::text").await;
+    setup
+        .batch_execute(&format!(
+            "ALTER DATABASE {} SET search_path = diario, public",
+            name[0]
+        ))
+        .await
+        .expect("put diario first on the search path");
+    let client = admin(&db.url).await;
+    let public_tables =
+        "SELECT tablename::text FROM pg_tables WHERE schemaname = 'public' ORDER BY 1";
+    let goose_before = rows(&client, "public.goose_db_version").await;
+    let deliveries_before = rows(&client, "public.alert_deliveries").await;
+
+    Migrator::up(&orm(&db.url).await, None)
+        .await
+        .expect("migrate");
+
+    assert_eq!(
+        texts(&client, "SELECT current_schema()::text").await,
+        ["diario"]
+    );
+    assert_eq!(table_names(&client).await, TODAYS_TABLES);
+    assert_eq!(
+        texts(&client, public_tables).await,
+        ["alert_deliveries", "goose_db_version"]
+    );
+    assert_eq!(rows(&client, "public.goose_db_version").await, goose_before);
+    assert_eq!(
+        rows(&client, "public.alert_deliveries").await,
+        deliveries_before
+    );
+}
