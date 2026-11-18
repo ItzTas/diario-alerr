@@ -13,7 +13,7 @@ use diario_alerr::text::Hits;
 use tokio::time::Instant;
 
 use support::fake_gazette::FakeGazette;
-use support::{eventually, fixed_clock, migrated_database, utc};
+use support::{eventually, fixed_clock, migrated_database, next_signal, utc};
 
 fn now() -> DateTime<Utc> {
     utc("2026-11-09T12:00:00Z")
@@ -114,10 +114,13 @@ async fn run_cycle_alerts_on_matches() {
     ]);
     fake.with_hits(10, hits_on(4));
     let monitor = prepared(&db.url, fake.clone()).await;
+    let mut signals = monitor.notifier().subscribe();
 
     assert_eq!(monitor.run_cycle().await, CycleOutcome::Complete);
 
-    assert_eq!(ids(&alerts(&monitor).await), ["welcome", "edition-10"]);
+    let stored = alerts(&monitor).await;
+    assert_eq!(ids(&stored), ["welcome", "edition-10"]);
+    assert_eq!(next_signal(&mut signals).await, stored[1].seq);
     assert_eq!(fake.listing_afters()[0], utc("2026-10-31T00:00:00Z"));
     assert_eq!(
         monitor.store().cursor().await.unwrap(),
