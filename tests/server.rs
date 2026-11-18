@@ -133,6 +133,19 @@ async fn add_alert(url: &str, id: &str) {
         .expect("insert an alert");
 }
 
+async fn insert_again(url: &str, id: &str) {
+    connect(url)
+        .await
+        .execute(
+            "INSERT INTO alerts (id, title, link, body, published_at)
+             VALUES ($1, 'title', 'https://x/again', 'body', $2)
+             ON CONFLICT (id) DO NOTHING",
+            &[&id, &now()],
+        )
+        .await
+        .expect("insert an alert id that exists");
+}
+
 async fn started_after_three_alerts(url: &str) -> (DiarioPlugin<FakeGazette>, Vec<i64>) {
     let (_, plugin, all) = scheduled_after_three_alerts(url).await;
     (plugin, all)
@@ -410,20 +423,21 @@ async fn the_end_of_the_first_read_signals_the_alerts_it_held() {
         return;
     };
     let (scheduler, plugin, all) = scheduled_after_three_alerts(&db.url).await;
-    let newest = scheduler
+    insert_again(&db.url, "edition-late").await;
+    let issued = scheduler
         .monitor()
         .store()
         .last_issued_seq()
         .await
-        .expect("newest seq");
-    assert_eq!(all[3], newest);
+        .expect("last issued seq");
+    assert_eq!(issued, all[3] + 1);
     let mut signals = scheduler.monitor().notifier().subscribe();
     signals.latest_seq();
 
     assert_eq!(seqs(&page(&plugin, 0, 2).await), all[..2]);
     assert_eq!(pending_signal(&mut signals).await, None);
     assert_eq!(seqs(&page(&plugin, all[1], 2).await), all[2..3]);
-    assert_eq!(pending_signal(&mut signals).await, Some(newest));
+    assert_eq!(pending_signal(&mut signals).await, Some(all[3]));
     let late = page(&plugin, all[2], 2).await;
     let ids: Vec<&str> = late.iter().map(|event| event.id.as_str()).collect();
     assert_eq!(ids, ["edition-late"]);

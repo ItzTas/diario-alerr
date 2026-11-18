@@ -58,7 +58,11 @@ async fn prepared(
 }
 
 async fn alerts(monitor: &Monitor<Client>) -> Vec<SequencedAlert> {
-    monitor.store().alerts_after(0, 1000).await.expect("alerts")
+    alerts_in(monitor.store()).await
+}
+
+async fn alerts_in(store: &Store) -> Vec<SequencedAlert> {
+    store.alerts_after(0, 1000).await.expect("alerts")
 }
 
 #[tokio::test]
@@ -265,6 +269,20 @@ async fn signal_above(
     }
 }
 
+async fn insert_again(url: &str, id: &str) {
+    let (client, connection) = tokio_postgres::connect(url, NoTls).await.expect("connect");
+    tokio::spawn(connection);
+    client
+        .execute(
+            "INSERT INTO alerts (id, title, link, body, published_at)
+             VALUES ($1, 'title', 'https://x/again', 'body', now())
+             ON CONFLICT (id) DO NOTHING",
+            &[&id],
+        )
+        .await
+        .expect("insert an alert id that exists");
+}
+
 async fn seeded_store(url: &str) -> Store {
     let cursor = utc("2026-11-02T10:00:00Z");
     let store = Store::new(url).expect("store");
@@ -329,7 +347,11 @@ async fn watch_signals_at_once_and_after_each_recorded_alert() {
         return;
     };
     let store = seeded_store(&db.url).await;
-    let seeded = store.last_issued_seq().await.expect("the seeded seq");
+    insert_again(&db.url, "edition-701").await;
+    let stored = alerts_in(&store).await;
+    let seeded = stored.last().expect("the seeded alerts").seq;
+    let issued = store.last_issued_seq().await.expect("last issued seq");
+    assert_eq!(issued, seeded + 1);
     let site = GazetteSite::start(vec![]).await;
     let sockets = tempfile::tempdir().expect("socket directory");
     let plugin = spawn_plugin(&[

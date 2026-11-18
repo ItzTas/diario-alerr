@@ -62,6 +62,7 @@ WHERE seq <= (SELECT acked_seq FROM monitor_state)
   AND seq NOT IN (SELECT seq FROM alerts ORDER BY seq DESC LIMIT $1)";
 const ALERTS_AFTER: &str = "SELECT seq, id, title, link, body, published_at FROM alerts WHERE seq > $1 ORDER BY seq LIMIT $2";
 const ACK_ALERTS: &str = "UPDATE monitor_state SET acked_seq = $1 WHERE acked_seq < $1";
+const NEWEST_ALERT_SEQ: &str = "SELECT COALESCE(max(seq), 0) FROM alerts";
 const LAST_ISSUED_SEQ: &str = "SELECT GREATEST(
     (SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM alerts_seq_seq),
     (SELECT COALESCE(max(seq), 0) FROM alerts)
@@ -275,6 +276,15 @@ impl Store {
 
     pub async fn last_issued_seq(&self) -> Result<i64, StoreError> {
         let row = self.client().await?.query_one(LAST_ISSUED_SEQ, &[]).await?;
+        Ok(row.try_get(0)?)
+    }
+
+    pub async fn newest_alert_seq(&self) -> Result<i64, StoreError> {
+        let row = self
+            .client()
+            .await?
+            .query_one(NEWEST_ALERT_SEQ, &[])
+            .await?;
         Ok(row.try_get(0)?)
     }
 

@@ -24,6 +24,7 @@ struct Started {
     lock: WriterLock,
     monitor: Monitor<Client>,
     first_read_boundary: i64,
+    newest_alert: i64,
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -59,6 +60,13 @@ async fn start_up(config: &Config, limit: Duration) -> anyhow::Result<Started> {
         store.last_issued_seq(),
     )
     .await?;
+    let newest_alert = within(
+        deadline,
+        limit,
+        "reading the newest stored alert",
+        store.newest_alert_seq(),
+    )
+    .await?;
     let gazette = Client::new(config.gazette_api_url.clone(), HTTP_TIMEOUT)
         .context("building the gazette client")?;
     let monitor = Monitor::new(store, gazette, monitor_options(config));
@@ -73,6 +81,7 @@ async fn start_up(config: &Config, limit: Duration) -> anyhow::Result<Started> {
         lock,
         monitor,
         first_read_boundary,
+        newest_alert,
     })
 }
 
@@ -105,9 +114,10 @@ async fn serve_until_stopped(started: Started) -> anyhow::Result<()> {
         mut lock,
         monitor,
         first_read_boundary,
+        newest_alert,
     } = started;
     let notifier = monitor.notifier().clone();
-    notifier.notify(first_read_boundary);
+    notifier.notify(newest_alert);
     let scheduler = Scheduler::new(Arc::new(monitor));
     let plugin =
         DiarioPlugin::new(Arc::clone(&scheduler)).with_first_read_boundary(first_read_boundary);

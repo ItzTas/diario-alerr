@@ -138,10 +138,10 @@ The Go matcher (`internal/gazette/match.go`, last changed in `764b330`) is the s
   prints the SDK's `NOT_LAUNCHED_BY_HUB` text on stderr and exits 1.
 - Stdout carries only the handshake line. Logs go to stderr as JSON lines.
 - Start-up reads the configuration, checks that `pdftotext -v` runs, takes the database writer
-  lock, removes leftover PDFs, applies the migrations, opens the pool, reads the newest alert `seq`
-  and prepares the monitor state, all before the handshake. Each connection attempt has 10 s,
-  `pdftotext -v` has 5 s, and the whole sequence has 45 s, because the hub kills a plugin that has
-  not answered in 60 s.
+  lock, removes leftover PDFs, applies the migrations, opens the pool, reads the newest issued
+  `seq` and the newest stored alert, and prepares the monitor state, all before the handshake.
+  Each connection attempt has 10 s, `pdftotext -v` has 5 s, and the whole sequence has 45 s,
+  because the hub kills a plugin that has not answered in 60 s.
 - The `pdftotext` check exists because nothing else runs it until a new edition arrives. A hub
   image without poppler, or with a broken one, shows up as a plugin that does not start instead of
   one that fails on the next edition.
@@ -169,16 +169,19 @@ The Go matcher (`internal/gazette/match.go`, last changed in `764b330`) is the s
   refuses with `a check is already running`.
 - The plugin serves `Watch` through the SDK's `serve_with_notifier`, so the hub polls it as soon
   as something changes instead of every 15 s. The plugin signals:
-  - At start, with the newest `seq` that existed at start-up. The SDK sends the current value as
-    the first signal of every `Watch` call.
+  - At start, with the `seq` of the newest alert stored at start-up. The SDK sends the current
+    value as the first signal of every `Watch` call.
   - After each committed edition record that inserted an alert, with that alert's `seq`.
   - When a cycle starts and when it ends.
   - When `Events` finds the hub ahead of the database, and when the two agree again.
-  - When the first read ends (below), with the newest `seq` issued.
+  - When the first read ends (below), with the `seq` of the newest stored alert.
 
   The SDK also sends a heartbeat every 30 s. On a signal the hub calls `Describe`, `Status` and
   sometimes `Events`, but never `Check`, so a signal never makes the plugin call the gazette. A hub
-  without `Watch` polls every 15 s as before.
+  without `Watch` polls every 15 s as before. Signals carry the `seq` of a stored alert, never the
+  alert sequence's own value: a conflicting or rolled-back insert moves the sequence past every
+  stored alert, and a signal with that value would make the hub read `Events` on every signal until
+  the next alert.
 - `Events(after, limit)` returns the alerts with a `seq` above `after`, in order, exactly
   `min(limit, available)` of them, except during the first read (next item). A `limit` of 0 means
   100, and the maximum is 500. Each call acknowledges every alert up to `after`, and writes the

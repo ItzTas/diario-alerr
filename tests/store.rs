@@ -510,6 +510,39 @@ async fn last_issued_seq_follows_the_alert_sequence() {
 }
 
 #[tokio::test]
+async fn newest_alert_seq_is_the_seq_of_the_newest_stored_alert() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let store = Store::new(&db.url).expect("store");
+    assert_eq!(store.newest_alert_seq().await.expect("no alerts"), 0);
+
+    store
+        .initialize(start(), &welcome())
+        .await
+        .expect("initialize");
+    store
+        .record_edition(&edition(1, start(), Some(alert("a", start()))))
+        .await
+        .expect("record");
+    store
+        .record_edition(&edition(2, start(), Some(alert("a", start()))))
+        .await
+        .expect("record the same alert id");
+
+    let stored = all_alerts(&store).await;
+    assert_eq!(ids(&stored), ["welcome", "a"]);
+    assert_eq!(
+        store.last_issued_seq().await.expect("last issued"),
+        stored[1].seq + 1
+    );
+    assert_eq!(
+        store.newest_alert_seq().await.expect("newest alert"),
+        stored[1].seq
+    );
+}
+
+#[tokio::test]
 async fn mark_success_records_the_last_success() {
     let Some(db) = migrated_database().await else {
         return;
