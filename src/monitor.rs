@@ -60,11 +60,12 @@ pub enum CycleOutcome {
 
 impl<G: Gazette> Monitor<G> {
     pub fn new(store: Store, gazette: G, options: MonitorOptions) -> Monitor<G> {
+        let notifier = Notifier::new();
         Monitor {
-            store,
+            store: store.with_notifier(notifier.clone()),
             gazette,
             options,
-            notifier: Notifier::new(),
+            notifier,
             keep_seen: MAX_SEEN,
             keep_alerts: MAX_ALERTS,
         }
@@ -171,10 +172,7 @@ impl<G: Gazette> Monitor<G> {
             published: edition.published,
             alert: alert_for(edition, hits),
         };
-        let Some(seq) = self.store.record_edition(&record).await? else {
-            return Ok(());
-        };
-        self.notifier.notify(seq);
+        self.store.record_edition(&record).await?;
         Ok(())
     }
 

@@ -5,6 +5,7 @@ use std::error::Error;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use monitor_hub_plugin::Notifier;
 use monitor_hub_plugin::migrate::{MigrateError, Migration, up};
 use sea_orm::sea_query::{Expr, ExprTrait, OnConflict, PgFunc};
 use sea_orm::{
@@ -170,6 +171,7 @@ impl WriterLock {
 #[derive(Clone)]
 pub struct Store {
     connection: DatabaseConnection,
+    notifier: Notifier,
 }
 
 impl Store {
@@ -181,7 +183,16 @@ impl Store {
         let options = connection::with_limits(database_options(database_url)?, limits);
         Ok(Store {
             connection: pool(options),
+            notifier: Notifier::new(),
         })
+    }
+
+    pub(crate) fn with_notifier(self, notifier: Notifier) -> Store {
+        Store { notifier, ..self }
+    }
+
+    pub fn notifier(&self) -> &Notifier {
+        &self.notifier
     }
 
     #[cfg(test)]
@@ -189,6 +200,8 @@ impl Store {
         &self.connection
     }
 
+    // No signal for the welcome: it is written before the hub can read, and the start-up signal
+    // and the end of the first read announce it.
     pub async fn initialize(
         &self,
         cursor: DateTime<Utc>,
@@ -251,7 +264,11 @@ impl Store {
             None => None,
         };
         transaction.commit().await?;
-        Ok(inserted)
+        let Some(seq) = inserted else {
+            return Ok(None);
+        };
+        self.notifier.notify(seq);
+        Ok(Some(seq))
     }
 
     pub async fn mark_success(&self, at: DateTime<Utc>) -> Result<(), StoreError> {

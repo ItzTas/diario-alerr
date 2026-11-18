@@ -12,7 +12,7 @@ use monitor_hub_plugin::migrate::up;
 use tokio::net::TcpListener;
 use tokio_postgres::{Client, NoTls};
 
-use support::{database, migrated_database};
+use support::{database, migrated_database, next_signal, pending_signal};
 
 const PASSWORD: &str = "hunter2";
 
@@ -63,6 +63,19 @@ async fn connect(url: &str) -> Client {
     let (client, connection) = tokio_postgres::connect(url, NoTls).await.expect("connect");
     tokio::spawn(connection);
     client
+}
+
+async fn refuse_alerts_at_commit(url: &str) {
+    connect(url)
+        .await
+        .batch_execute(
+            "CREATE FUNCTION refuse_alerts() RETURNS trigger LANGUAGE plpgsql AS $$
+             BEGIN RAISE EXCEPTION 'refused at commit'; END $$;
+             CREATE CONSTRAINT TRIGGER refuse_at_commit AFTER INSERT ON alerts
+             DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION refuse_alerts();",
+        )
+        .await
+        .expect("create the trigger that refuses alerts at commit");
 }
 
 async fn all_alerts(store: &Store) -> Vec<SequencedAlert> {
@@ -264,6 +277,68 @@ async fn record_edition_returns_the_seq_of_the_alert_it_inserted() {
     assert_eq!(without_alert, None);
     assert_eq!(repeated, None);
     assert_eq!(seen(&store, &[10, 11, 12]).await, [10, 11, 12]);
+}
+
+#[tokio::test]
+async fn record_edition_signals_the_seq_it_committed() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let store = initialized(&db.url).await;
+    let mut signals = store.notifier().subscribe();
+    assert_eq!(signals.latest_seq(), 0);
+
+    let inserted = store
+        .record_edition(&edition(
+            1,
+            start(),
+            Some(alert("edition-1", start() + hours(1))),
+        ))
+        .await
+        .expect("record edition 1")
+        .expect("edition 1 inserted its alert");
+    assert_eq!(next_signal(&mut signals).await, inserted);
+
+    store
+        .record_edition(&edition(2, start(), None))
+        .await
+        .expect("record edition 2");
+    store
+        .record_edition(&edition(
+            3,
+            start(),
+            Some(alert("edition-1", start() + hours(2))),
+        ))
+        .await
+        .expect("record edition 3");
+    assert_eq!(pending_signal(&mut signals).await, None);
+}
+
+#[tokio::test]
+async fn a_record_refused_at_commit_signals_nothing() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let store = initialized(&db.url).await;
+    refuse_alerts_at_commit(&db.url).await;
+    let mut signals = store.notifier().subscribe();
+    let before = signals.latest_seq();
+
+    let refused = store
+        .record_edition(&edition(
+            1,
+            start(),
+            Some(alert("edition-1", start() + hours(1))),
+        ))
+        .await;
+
+    assert!(
+        matches!(refused, Err(StoreError::Database(_))),
+        "{refused:?}"
+    );
+    assert_eq!(pending_signal(&mut signals).await, None);
+    assert_eq!(signals.latest_seq(), before);
+    assert_eq!(ids(&all_alerts(&store).await), ["welcome"]);
 }
 
 #[tokio::test]

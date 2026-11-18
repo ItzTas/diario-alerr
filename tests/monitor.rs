@@ -11,10 +11,9 @@ use diario_alerr::monitor::{CycleOutcome, Gazette, Monitor, MonitorOptions};
 use diario_alerr::store::{SequencedAlert, Store};
 use diario_alerr::text::Hits;
 use tokio::time::Instant;
-use tokio_postgres::NoTls;
 
 use support::fake_gazette::FakeGazette;
-use support::{eventually, fixed_clock, migrated_database, next_signal, pending_signal, utc};
+use support::{eventually, fixed_clock, migrated_database, utc};
 
 fn now() -> DateTime<Utc> {
     utc("2026-11-09T12:00:00Z")
@@ -75,20 +74,6 @@ async fn seen<G: Gazette>(monitor: &Monitor<G>, ids: &[i64]) -> Vec<i64> {
     seen
 }
 
-async fn refuse_alerts_at_commit(url: &str) {
-    let (client, connection) = tokio_postgres::connect(url, NoTls).await.expect("connect");
-    tokio::spawn(connection);
-    client
-        .batch_execute(
-            "CREATE FUNCTION refuse_alerts() RETURNS trigger LANGUAGE plpgsql AS $$
-             BEGIN RAISE EXCEPTION 'refused at commit'; END $$;
-             CREATE CONSTRAINT TRIGGER refuse_at_commit AFTER INSERT ON alerts
-             DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION refuse_alerts();",
-        )
-        .await
-        .expect("create the trigger that refuses alerts at commit");
-}
-
 #[tokio::test]
 async fn prepare_creates_the_state_and_the_welcome_once() {
     let Some(db) = migrated_database().await else {
@@ -142,83 +127,6 @@ async fn run_cycle_alerts_on_matches() {
 
     assert_eq!(monitor.run_cycle().await, CycleOutcome::Complete);
     assert_eq!(alerts(&monitor).await.len(), 2);
-}
-
-#[tokio::test]
-async fn a_cycle_signals_the_seq_of_its_newest_alert() {
-    let Some(db) = migrated_database().await else {
-        return;
-    };
-    let published = utc("2026-11-06T20:00:00Z");
-    let fake = FakeGazette::new(vec![
-        edition(10, published),
-        edition(11, published + TimeDelta::hours(1)),
-    ]);
-    fake.with_hits(10, hits_on(1));
-    fake.with_hits(11, hits_on(2));
-    let monitor = prepared(&db.url, fake).await;
-    let mut signals = monitor.notifier().subscribe();
-    signals.latest_seq();
-
-    assert_eq!(monitor.run_cycle().await, CycleOutcome::Complete);
-
-    let recorded = alerts(&monitor).await;
-    assert_eq!(ids(&recorded), ["welcome", "edition-10", "edition-11"]);
-    let newest = recorded[2].seq;
-    assert_eq!(next_signal(&mut signals).await, newest);
-    assert_eq!(signals.latest_seq(), newest);
-}
-
-#[tokio::test]
-async fn an_alert_whose_commit_fails_signals_nothing() {
-    let Some(db) = migrated_database().await else {
-        return;
-    };
-    let fake = FakeGazette::new(vec![edition(10, utc("2026-11-06T20:00:00Z"))]);
-    fake.with_hits(10, hits_on(1));
-    let monitor = prepared(&db.url, fake).await;
-    refuse_alerts_at_commit(&db.url).await;
-    let mut signals = monitor.notifier().subscribe();
-    signals.latest_seq();
-
-    assert_eq!(
-        monitor.run_cycle().await,
-        CycleOutcome::Incomplete(
-            "could not record edition ED 10: the database is unavailable".to_owned()
-        )
-    );
-
-    assert_eq!(pending_signal(&mut signals).await, None);
-    assert_eq!(signals.latest_seq(), 0);
-    assert_eq!(ids(&alerts(&monitor).await), ["welcome"]);
-}
-
-#[tokio::test]
-async fn an_alert_recorded_before_a_failed_edition_is_signalled() {
-    let Some(db) = migrated_database().await else {
-        return;
-    };
-    let published = utc("2026-11-06T20:00:00Z");
-    let fake = FakeGazette::new(vec![
-        edition(10, published),
-        edition(11, published + TimeDelta::hours(1)),
-    ]);
-    fake.with_hits(10, hits_on(1));
-    fake.failing_scan(11);
-    let monitor = prepared(&db.url, fake).await;
-    let mut signals = monitor.notifier().subscribe();
-    signals.latest_seq();
-
-    assert_eq!(
-        monitor.run_cycle().await,
-        CycleOutcome::Incomplete(
-            "could not read edition ED 11: pdftotext: pdf unavailable".to_owned()
-        )
-    );
-
-    let recorded = alerts(&monitor).await;
-    assert_eq!(ids(&recorded), ["welcome", "edition-10"]);
-    assert_eq!(next_signal(&mut signals).await, recorded[1].seq);
 }
 
 #[tokio::test]
