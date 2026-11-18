@@ -119,6 +119,14 @@ The Go matcher (`internal/gazette/match.go`, last changed in `764b330`) is the s
   term's position, counting from 1, and its size:
   `WATCH_TERMS term 2 (32 words) is too long to match: shorten it`. The configuration compiles
   every pattern once to check it, and the scan compiles them again for each edition, as Go does.
+- The patterns' `\p{L}` and `\p{N}` come from `regex-syntax` 0.8.11, the newest release, which
+  carries the Unicode 16 tables. Go 1.27.2 carries Unicode 17. Letters and digits added in
+  Unicode 17 are not letters or digits to the plugin's patterns. Between the words of a name they
+  stop the match, where Go reads a middle name. Next to a registration number they count as an
+  edge, so the plugin matches where Go sees the number touching a letter or digit. None of them
+  occurs in Portuguese text. Revisit this when `regex-syntax` updates its tables. Deciding whether
+  a term is a registration number, and which of its characters count, uses `unicode-properties`,
+  which carries Unicode 17 like Go.
 
 ## Process contract
 
