@@ -559,7 +559,7 @@ mod tests {
         .unwrap();
 
         let agent = received.recv().await.expect("a request").expect("a header");
-        assert_eq!(agent, "diario-alerr/2.0.0");
+        assert_eq!(agent, "diario-alerr/2.0.1");
     }
 
     #[test]

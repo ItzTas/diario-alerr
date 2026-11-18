@@ -167,7 +167,7 @@ async fn describe_names_the_plugin_and_its_kinds() {
 
     assert_eq!(described.name, "diario");
     assert_eq!(described.display_name, "ALE/RR Official Gazette");
-    assert_eq!(described.version, "2.0.0");
+    assert_eq!(described.version, "2.0.1");
     assert_eq!(
         described.kinds,
         [
