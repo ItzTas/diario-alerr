@@ -41,17 +41,16 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 │   ├── golden.rs              # tests only: golden!("file") reads testdata/golden
 │   └── logtest.rs             # tests only: captures log events on the calling thread
 ├── sql/
-│   ├── schema/                # goose-format migrations, embedded by MIGRATIONS
-│   └── rollback/              # mark-alerts-delivered.sql, run before going back to the Go release
+│   └── schema/                # goose-format migrations, embedded by MIGRATIONS
 ├── testdata/golden/           # frozen vectors from the Go release v1.0.0
 ├── tests/
 │   ├── support/               # shared helpers, one file per subject (see Testing)
 │   ├── gazette.rs  store.rs  monitor.rs  scheduler.rs  server.rs
-│   └── end_to_end.rs  entrypoint.rs  conformance.rs  go_compat.rs
+│   └── end_to_end.rs  entrypoint.rs  conformance.rs
 ├── .env.example               # every variable, for compose, the tests and a local plugin run
 ├── .githooks/                 # commit-msg (Conventional Commits) + pre-commit (cargo fmt, cargo test)
 ├── .github/workflows/         # docker.yml: fmt, clippy and tests against Postgres, then the GHCR image
-├── .prototools                # proto: pins Go for the compatibility and conformance tests
+├── .prototools                # proto: pins Go for the conformance test
 ├── Dockerfile                 # cross-compiled static musl binary, final stage FROM scratch
 ├── compose.yaml               # development Postgres only, read-only, no capabilities
 └── Makefile                   # check, test, up, down
@@ -86,8 +85,6 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
   outside the store's methods. A transaction that inserts an alert locks the state row first, so
   `seq` order is commit order.
 - Times are `TIMESTAMPTZ` and map to `DateTime<Utc>`. Integers are `BIGINT`.
-- A file in `sql/rollback/` is an operator script for going back to an earlier release. It is not
-  a migration and the plugin never runs it.
 
 ## Testing
 
@@ -98,12 +95,11 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
   `mod.rs` carries `#![allow(dead_code)]` because no single test file uses all of it. One file per
   subject: `gazette_site.rs` (fake WordPress site), `pdf.rs` (a hand-written PDF),
   `fake_gazette.rs` (a `Gazette` for cycle tests), `process.rs` (starts the binary, reads the
-  handshake, sends signals), `channels.rs` (fake ntfy and Telegram, used only by the Go release)
-  and `go.rs` (builds the Go release from the tag `v1.0.0`).
+  handshake, sends signals).
 - Database tests get a database from `support::migrated_database()`, or from the test kit's
   `database()` when the test migrates by itself.
-- A test that needs something outside the crate (Postgres, `pdftotext`, `sh`, `go`, `git`, the tag
-  `v1.0.0`, the conformance command) prints a `skipping:` notice and returns when it is missing,
+- A test that needs something outside the crate (Postgres, `pdftotext`, `sh`, `go`, the conformance
+  command) prints a `skipping:` notice and returns when it is missing,
   and panics when `CI` is set and not empty.
 - Golden vectors in `testdata/golden/` came from the Go release and are frozen. A mismatch is a
   bug in the Rust code.

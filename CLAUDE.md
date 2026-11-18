@@ -11,9 +11,7 @@ written in Rust on the monitor-hub plugin SDK (`monitor-hub-plugin`, git tag `sd
 
 The image does not run on its own. It holds `/plugin/plugin.json` and `/plugin/diario-alerr`, and
 the hub's image build copies that directory in. Release `1.0.0` was a standalone Go service; its
-code is gone from the tree, and the tag `v1.0.0` stays as the reference for the compatibility
-tests. The image to go back to is a later build of the Go program: see "Rollback to the Go
-release".
+code is gone from the tree, and the tag `v1.0.0` stays as the reference for the golden vectors.
 
 **Before creating or moving a module, test file, migration or any config/scaffolding file, read
 `.claude/skills/project-structure/SKILL.md`.** It holds the full layout and the persistence
@@ -65,9 +63,6 @@ skipping.
 - `pdftotext` (poppler) for the PDF scans, and for every test that starts the binary, because
   start-up checks for it.
 - `sh` with `kill` for the tests that start the binary and signal it.
-- `go`, `git` and the tag `v1.0.0` for `tests/go_compat.rs`. It extracts the Go release with
-  `git archive v1.0.0`, builds it, and caches the binary under `target/tmp/go-v1.0.0/`. A shallow
-  clone has no tag, so CI checks out the full history.
 - The conformance command for `tests/conformance.rs`: the binary named by `PLUGIN_CONFORMANCE`,
   or else `go install` of `plugin-conformance` at the SDK's Go tag `sdk-go/v0.4.0`, cached under
   `~/.cache/monitor-hub/plugin-conformance/`.
@@ -262,13 +257,3 @@ cannot store such an event and would reject every page from then on.
   a 60 s `tcp_user_timeout`. The writer lock's connection has the same keepalives but no statement
   timeout, because it runs the migrations.
 - The Go release's `alert_deliveries` table stays, and nothing writes to it.
-
-## Rollback to the Go release
-
-Stop the plugin, run `sql/rollback/mark-alerts-delivered.sql` against its database, then start
-`ghcr.io/itztas/diario-alerr:sha-764b330` on that database. That image is the Go program built
-from `main` after `1.0.0`: the same database code, plus the two matching fixes this plugin also
-has. `1.0.0` lacks those fixes, so it would miss mentions the plugin finds. The script marks
-every stored alert as delivered on Telegram and ntfy, so the Go program does not send again what
-the hub already sent. That includes alerts the hub stored but had not delivered yet. After the
-rollback nobody sends those, so look for pending deliveries on the hub before running it.

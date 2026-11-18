@@ -1,6 +1,6 @@
 use std::env;
 use std::io::{BufRead, BufReader, Read};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -8,19 +8,12 @@ use std::time::{Duration, Instant};
 
 use monitor_hub_plugin::{MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE};
 use serde_json::Value;
-use tempfile::TempDir;
 
 pub const COOKIE: (&str, &str) = (MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE);
 
 const HANDSHAKE_LIMIT: Duration = Duration::from_secs(30);
 const PIPE_LIMIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(10);
-const STOP_GRACE: Duration = Duration::from_secs(5);
-
-pub struct RunningService {
-    running: RunningPlugin,
-    _workdir: TempDir,
-}
 
 pub struct RunningPlugin {
     pub child: Child,
@@ -58,15 +51,6 @@ pub fn spawn_plugin(env: &[(&str, &str)]) -> RunningPlugin {
 
 pub fn run_plugin(args: &[&str], env: &[(&str, &str)], limit: Duration) -> Exited {
     start(args, env).exit_within(limit)
-}
-
-pub fn spawn_service(program: &Path, env: &[(&str, &str)]) -> RunningService {
-    let workdir = tempfile::tempdir().expect("an empty working directory");
-    let running = start_program(program, workdir.path(), env);
-    RunningService {
-        running,
-        _workdir: workdir,
-    }
 }
 
 pub fn terminate(child: &mut Child) {
@@ -138,61 +122,11 @@ impl Drop for RunningPlugin {
     }
 }
 
-impl RunningService {
-    pub fn stop(&mut self) -> Exited {
-        self.ensure_running();
-        terminate(&mut self.running.child);
-        let deadline = Instant::now() + STOP_GRACE;
-        while self.still_running() {
-            if Instant::now() >= deadline {
-                self.fail(&format!("the service did not stop within {STOP_GRACE:?}"));
-            }
-            thread::sleep(POLL);
-        }
-        self.running.exit_within(Duration::ZERO)
-    }
-
-    pub fn ensure_running(&mut self) {
-        let exited = self.running.child.try_wait().expect("poll the service");
-        if let Some(status) = exited {
-            self.fail(&format!("the service exited early: {status}"));
-        }
-    }
-
-    pub fn fail(&mut self, problem: &str) -> ! {
-        let _ = self.running.child.kill();
-        let _ = self.running.child.wait();
-        let stdout = collected(&self.running.output.stdout);
-        let stderr = collected(&self.running.output.stderr);
-        panic!("{problem}\nservice stdout:\n{stdout}\nservice stderr:\n{stderr}");
-    }
-
-    fn still_running(&mut self) -> bool {
-        matches!(self.running.child.try_wait(), Ok(None))
-    }
-}
-
-impl Drop for RunningService {
-    fn drop(&mut self) {
-        if !self.still_running() || send_term(&self.running.child).is_err() {
-            return;
-        }
-        let deadline = Instant::now() + STOP_GRACE;
-        while self.still_running() && Instant::now() < deadline {
-            thread::sleep(POLL);
-        }
-    }
-}
-
 fn start(args: &[&str], env: &[(&str, &str)]) -> RunningPlugin {
     spawn(
         Command::new(env!("CARGO_BIN_EXE_diario-alerr")).args(args),
         env,
     )
-}
-
-fn start_program(program: &Path, workdir: &Path, env: &[(&str, &str)]) -> RunningPlugin {
-    spawn(Command::new(program).current_dir(workdir), env)
 }
 
 fn spawn(command: &mut Command, env: &[(&str, &str)]) -> RunningPlugin {
