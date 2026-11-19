@@ -83,7 +83,7 @@ reason to edit a vector.
 CI (`.github/workflows/docker.yml`) runs `cargo fmt --check`, clippy and `cargo test --locked`
 against a `postgres:18-alpine` service, with Go 1.27.2 and poppler installed. Then it builds the
 image for amd64 and arm64 and publishes it to `ghcr.io` on every run that is not a pull request:
-pushes to `main`, `v*` tags and manual runs. A `v*` tag gets the version tags (`2.1.0` and `2.1`),
+pushes to `main`, `v*` tags and manual runs. A `v*` tag gets the version tags (`2.2.0` and `2.2`),
 only the default branch moves `latest`, and every image gets a `sha-` tag.
 
 ## Configuration
@@ -93,7 +93,34 @@ on). The hub removes the prefix before it starts the plugin. The plugin reads on
 environment, never a `.env` file. `.env.example` lists every variable except `GAZETTE_API_URL`,
 which only the tests set.
 
-- `DATABASE_URL` (required): Postgres address. The plugin connects without TLS.
+- `DATABASE_URL` (required): the Postgres address, as
+  `postgres://user:password@host:port/database?sslmode=disable` (`postgresql://` works too). Put
+  the host, port, user, password and database in the URL. Whatever the URL leaves out, sqlx takes
+  from the `PG*` variables (`PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGOPTIONS`,
+  `PGSSLMODE` and the rest). After those it takes the user from the system account, and a missing
+  password from `PGPASSFILE` or from `~/.pgpass` in the home of the account the plugin runs as,
+  which it finds even without `HOME`. Under the hub the `PG*` variables only arrive when set as
+  `DIARIO__PG*`. sqlx logs a malformed `.pgpass` line whole at `warn`. Such a line ends before its
+  password field, so it can show a host, port, database and user, but no password.
+  - The plugin connects without TLS. `sslmode=disable`, `allow` and `prefer` connect in plain
+    text; `require`, `verify-ca` and `verify-full` fail at once.
+  - These are refused with `DATABASE_URL is not a valid Postgres address`, which never repeats the
+    address: the key=value form (`host=db user=diario`), several hosts (`h1,h2`), a URL with no
+    host (unless a `host` or `hostaddr` query key names one), any scheme other than the two above,
+    and any query key the plugin does not know. sqlx would log an unknown key together with its
+    value, and that value can be a secret (`sslpassword`, a misspelled `Password`).
+  - The plugin passes on the query keys sqlx reads: `sslmode`, `options`, `application_name`,
+    `host`, `hostaddr`, `port`, `dbname`, `user`, `password`, the certificate keys (`sslrootcert`,
+    `sslcert`, `sslkey` and their dashed forms) and `statement-cache-capacity`. Key names are case
+    sensitive.
+  - It accepts and ignores the libpq keys that 2.1 took and sqlx has no equivalent for:
+    `connect_timeout`, `tcp_user_timeout`, `keepalives`, `keepalives_idle`, `keepalives_interval`,
+    `keepalives_retries` and `load_balance_hosts`, plus `channel_binding=disable` or `prefer`,
+    `sslnegotiation=postgres` and `target_session_attrs=any`. Any other value of those last three
+    stops the start with a message that names the key and never its value: `channel_binding` and
+    `sslnegotiation` need TLS, and `target_session_attrs` needs a session check the plugin does not
+    run.
+  - An IPv6 host goes in brackets: `postgres://user:password@[::1]:5432/database`.
 - `WATCH_TERMS` (required): comma-separated names or registration numbers. Matching ignores case,
   accents and repeated whitespace. The words of a name match in order with up to four words of
   letters between them, so `Paulo Santos` also matches `PAULO HENRIQUE DE OLIVEIRA SANTOS`, but a
@@ -135,10 +162,11 @@ The Go matcher (`internal/gazette/match.go`, last changed in `764b330`) is the s
   prints the SDK's `NOT_LAUNCHED_BY_HUB` text on stderr and exits 1.
 - Stdout carries only the handshake line. Logs go to stderr as JSON lines.
 - Start-up reads the configuration, checks that `pdftotext -v` runs, takes the database writer
-  lock, removes leftover PDFs, applies the migrations, opens the pool, reads the newest issued
-  `seq` and the newest stored alert, and prepares the monitor state, all before the handshake.
-  Each connection attempt has 10 s, `pdftotext -v` has 5 s, and the whole sequence has 45 s,
-  because the hub kills a plugin that has not answered in 60 s.
+  lock, removes leftover PDFs, applies the migrations with `sea-orm-migration` on the lock's
+  connection, opens the pool, reads the newest issued `seq` and the newest stored alert, and
+  prepares the monitor state, all before the handshake. Each connection attempt has 10 s, and
+  sqlx retries a refused connection within them. `pdftotext -v` has 5 s, and the whole sequence
+  has 45 s, because the hub kills a plugin that has not answered in 60 s.
 - The `pdftotext` check exists because nothing else runs it until a new edition arrives. A hub
   image without poppler, or with a broken one, shows up as a plugin that does not start instead of
   one that fails on the next edition.
@@ -153,6 +181,11 @@ The Go matcher (`internal/gazette/match.go`, last changed in `764b330`) is the s
   database writer lock: ...`), or starts with `the database lock was lost`. A run outside the hub
   and a failure to start logging or the async runtime also exit 1, without a `fatal` line. The hub
   restarts the plugin with a backoff.
+- A query on the lock's connection every 0.5 s, with 10 s to answer, notices a lost lock (see
+  Persistence). The reason after `the database lock was lost: ` is `the lock's connection failed:
+  ...`, `the lock's connection did not answer within 10s` or `the lock's connection was replaced`.
+  A lock lost before the migrations stops the start the same way, under the step `applying the
+  database migrations`, and nothing is migrated.
 - A second process on the same database fails at start-up with `another diario-alerr process holds
   the database lock` and migrates nothing.
 - `Describe` names the plugin `diario` with two event kinds: `welcome` (info) and `term_found`
@@ -168,7 +201,9 @@ The Go matcher (`internal/gazette/match.go`, last changed in `764b330`) is the s
   as something changes instead of every 15 s. The plugin signals:
   - At start, with the `seq` of the newest alert stored at start-up. The SDK sends the current
     value as the first signal of every `Watch` call.
-  - After each committed edition record that inserted an alert, with that alert's `seq`.
+  - Right after each commit that inserts an alert, with that alert's `seq`. The store sends it
+    from `Store::record_edition`, so a failed commit signals nothing. The welcome alert has no
+    signal of its own: the signal at start and the one at the end of the first read cover it.
   - When a cycle starts and when it ends.
   - When `Events` finds the hub ahead of the database, and when the two agree again.
   - When the first read ends (below), with the `seq` of the newest stored alert.
@@ -211,10 +246,14 @@ The Go matcher (`internal/gazette/match.go`, last changed in `764b330`) is the s
   ```
 
   `seen_at` is when the plugin recorded the edition, so the alerts recorded around the restart
-  stand out. On a database taken over from the Go release, an alert with rows in
-  `alert_deliveries` was already sent by Go.
+  stand out.
 - When the database is down, `Events` answers `UNAVAILABLE` and `Status` answers `FAILING`, both
-  with `the database is unavailable`, without the address or the password.
+  with `the database is unavailable`, without the address or the password. Against a database
+  that refuses connections, sqlx keeps retrying for the 10 s allowed to get a connection, so
+  `Status` and `Events` take up to 10 s to answer, under the hub's 30 s limit per call. A cycle
+  then takes about 20 s, because the listing and the pruning after it each wait those 10 s. Its
+  failure (`could not list editions: the database is unavailable`) shows in `Status` about 30 s
+  after the cycle starts, since `Status` itself waits 10 s for the database.
 
 When `the hub is ahead of this database: reset the hub's position for this plugin` appears at
 `error` level, the hub asked for alerts after a `seq` this database never issued. That happens when
@@ -248,13 +287,58 @@ cannot store such an event and would reject every page from then on.
 
 ## Persistence
 
-- A schema change is a new file `sql/schema/0000N_name.sql` in goose format (`-- +goose Up` and
-  `-- +goose Down`) and a new entry in `MIGRATIONS` in `src/store.rs`. **Never edit a migration
-  that already exists.** The SDK's `migrate::up` applies them on the writer lock's connection and
-  keeps goose's version table, so the Go release reads the same database.
-- All SQL lives in `src/store.rs`. Every transaction that inserts an alert locks the state row
-  first, so the order of `seq` values is the order of the commits.
-- Pool connections run with a 20 s `statement_timeout`, a 5 s `lock_timeout`, TCP keepalives and
-  a 60 s `tcp_user_timeout`. The writer lock's connection has the same keepalives but no statement
-  timeout, because it runs the migrations.
-- The Go release's `alert_deliveries` table stays, and nothing writes to it.
+- The plugin reaches Postgres through SeaORM on sqlx. The tables are hand-written entities in
+  `src/store/entity/`. The migrations are `sea-orm-migration` modules in `src/migration/`, run in
+  the order of `Migrator::migrations`, and `seaql_migrations` records the ones applied.
+- The first migration, `m20261118_000001_goose_schema`, adopts the schema that goose built for 2.1
+  and the Go release. It reads `goose_db_version` in the current schema and runs the Up section of
+  each `sql/schema/` file that table has not recorded. A database without the table is new and
+  gets every file. It refuses a gap (a file not recorded while a higher version is) and a table
+  with no rows, accepts versions above 2, and never writes a goose row.
+- The second, `m20261118_000002_drop_go_tables`, drops `alert_deliveries` and `goose_db_version`
+  from that same schema, one statement each and without `CASCADE`. If another object depends on
+  one of them, the drop fails, nothing is dropped, and start-up stops with Postgres's error. 2.1
+  and the Go release no longer run on a database that went through it.
+- A schema change is a new module in `src/migration/` and a new entry at the end of
+  `Migrator::migrations`. **Never edit a migration that already exists, nor the files in
+  `sql/schema/`**: they are the first migration's input.
+- Start-up runs the migrations on the writer lock's connection, in one transaction that first
+  checks that the connection still holds the lock. Each migration's own transaction becomes a
+  savepoint inside it, and a run that fails records nothing. No migration can leave that
+  transaction: `use_transaction(Some(false))` does not take it out, and a statement Postgres
+  refuses inside a transaction block, such as `CREATE INDEX CONCURRENTLY`, makes start-up fail.
+- The SQL lives in the store (`src/store.rs` and `src/store/`) and in the migrations
+  (`src/migration/`, which reads `sql/schema/`). Nothing inserts an alert outside the store's
+  methods. Every transaction that inserts an alert locks the state row first, so the order of
+  `seq` values is the order of the commits.
+- `Store::record_edition` signals the hub with the new alert's `seq` right after the commit that
+  inserted it, never before. A failed commit, or a record without a new alert, signals nothing.
+  `Store::initialize` writes the welcome alert without a signal.
+- The pool has 4 connections. Each one runs with a 20 s `statement_timeout` and a 5 s
+  `lock_timeout`, asks the server for TCP keepalives (`tcp_keepalives_idle=30`,
+  `tcp_keepalives_interval=10`, `tcp_keepalives_count=3`, `tcp_user_timeout=60000`, in ms), and
+  is tested before each use. Getting a connection has 10 s. The pool keeps no minimum, idle limit
+  or lifetime, so sqlx runs no maintenance task and `Store::new` works outside a runtime.
+- The writer lock (`pg_try_advisory_lock`) has a connection of its own, outside the pool, with the
+  same keepalives, no statement or lock timeout because the migrations run there, and
+  `client_min_messages=warning`. It is never tested before use: a failed test would quietly open a
+  new connection without the lock. Every 0.5 s, a query with 10 s to answer checks in `pg_locks`
+  that this connection still holds the lock. The plugin gives up on a silent connection after
+  about 10.5 s, and the server frees a vanished plugin's lock only after about 60 s, so the lock
+  cannot pass to a second copy while the first could still write.
+
+The database layer adds these lines to the log. None carries the address or a password.
+
+- At start-up, sea-orm-migration logs `Applying all pending migrations`, then `Applying migration
+  '<name>'` and `Migration '<name>' has been applied` for each one it runs, or `No pending
+  migrations`. The plugin then logs `database migrations applied` with the names it applied, which
+  is `[]` on every restart. Postgres's notices, such as the migration table's `already exists,
+  skipping`, stay out because of `client_min_messages=warning`; warnings and errors still show. To
+  see the notices, run the statements by hand in `psql`.
+- `there is no transaction in progress` (`warn`, `sqlx::postgres::notice`) follows a commit that
+  Postgres refused, because SeaORM sends a `ROLLBACK` after it.
+- `error occurred while testing the connection on-release` (`warn`) appears when a call is dropped
+  in the middle of a statement (the 10 s limit of `Status`, a cancelled `Events`) or a connection
+  is cut. sqlx then closes that connection.
+- `acquired connection, but time to acquire exceeded slow threshold` (`warn`) appears when getting
+  a connection took more than 2 s.
