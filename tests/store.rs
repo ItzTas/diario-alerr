@@ -662,6 +662,56 @@ async fn mark_success_records_the_last_success() {
 }
 
 #[tokio::test]
+async fn pooled_connections_are_tested_before_use() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let store = initialized(&db.url).await;
+    assert_eq!(store.cursor().await.expect("first read"), start());
+    let admin = connect(&db.url).await;
+    let terminated: Vec<bool> = admin
+        .query(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()",
+            &[],
+        )
+        .await
+        .expect("terminate the pooled connections' backends")
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert!(
+        !terminated.is_empty() && terminated.iter().all(|ended| *ended),
+        "{terminated:?}"
+    );
+    let started = Instant::now();
+    loop {
+        let left: i64 = admin
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()",
+                &[],
+            )
+            .await
+            .expect("count the other backends")
+            .get(0);
+        if left == 0 {
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the terminated backends were still running after 5 seconds"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let cursor = store
+        .cursor()
+        .await
+        .expect("a read after the server ended the pooled connections");
+
+    assert_eq!(cursor, start());
+}
+
+#[tokio::test]
 async fn writer_lock_admits_one_holder() {
     let Some(db) = migrated_database().await else {
         return;
