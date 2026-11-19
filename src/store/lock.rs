@@ -19,7 +19,13 @@ pub const LOCK_CHECK_LIMIT: Duration = Duration::from_secs(10);
 pub(crate) const LOCK_LOST: &str = "the database lock was lost";
 
 const TRY_WRITER_LOCK: &str = "SELECT pg_try_advisory_lock($1), pg_backend_pid()";
-const BACKEND: &str = "SELECT pg_backend_pid()";
+// A row only while this session holds the writer lock: a connection without it answers none.
+const LOCK_HOLDER: &str = "SELECT pid FROM pg_locks
+WHERE locktype = 'advisory'
+  AND pid = pg_backend_pid()
+  AND granted
+  AND objsubid = 1
+  AND ((classid::bigint << 32) | objid::bigint) = $1";
 const CONNECTING: &str = "connecting to the database for the writer lock";
 
 pub struct WriterLock {
@@ -85,8 +91,8 @@ impl WriterLock {
     }
 
     async fn check(&self, on: &impl ConnectionTrait) -> Result<(), String> {
-        let backend = answered(backend_pid(on)).await?;
-        if backend != self.backend {
+        let holder = answered(lock_holder(on)).await?;
+        if holder != Some(self.backend) {
             return Err("the lock's connection was replaced".to_owned());
         }
         Ok(())
@@ -127,11 +133,13 @@ fn connect_error(error: DbErr) -> StoreError {
     StoreError::from(error)
 }
 
-async fn backend_pid(on: &impl ConnectionTrait) -> Result<i32, DbErr> {
-    on.query_one_raw(Statement::from_string(DbBackend::Postgres, BACKEND))
-        .await?
-        .ok_or_else(|| DbErr::RecordNotFound("pg_backend_pid() gave no row".into()))?
-        .try_get_by_index(0)
+async fn lock_holder(on: &impl ConnectionTrait) -> Result<Option<i32>, DbErr> {
+    let holder =
+        Statement::from_sql_and_values(DbBackend::Postgres, LOCK_HOLDER, [WRITER_LOCK_ID.into()]);
+    let Some(row) = on.query_one_raw(holder).await? else {
+        return Ok(None);
+    };
+    Ok(Some(row.try_get_by_index(0)?))
 }
 
 async fn answered<T>(work: impl Future<Output = Result<T, DbErr>>) -> Result<T, String> {
@@ -157,10 +165,88 @@ fn migration_error(error: DbErr) -> StoreError {
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::{ConnectionTrait, DbBackend, Statement};
+    use std::time::Duration;
 
-    use super::acquire_writer_lock;
+    use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
+
+    use super::{WRITER_LOCK_ID, WriterLock, acquire_writer_lock, single_connection};
     use crate::postgres::database;
+    use crate::store::connection::database_options;
+
+    async fn one_value<T: sea_orm::TryGetable>(on: &DatabaseConnection, statement: Statement) -> T {
+        on.query_one_raw(statement)
+            .await
+            .expect("query")
+            .expect("a row")
+            .try_get_by_index(0)
+            .expect("a value")
+    }
+
+    #[tokio::test]
+    async fn a_lock_released_on_its_own_connection_is_lost() {
+        let Some(db) = database().await else {
+            return;
+        };
+        let mut lock = acquire_writer_lock(&db.url).await.expect("lock");
+        let unlock = Statement::from_sql_and_values(
+            DbBackend::Postgres,
+            "SELECT pg_advisory_unlock($1)",
+            [WRITER_LOCK_ID.into()],
+        );
+        assert!(one_value::<bool>(&lock.connection, unlock).await);
+
+        let error = lock.migrate().await.expect_err("a released lock migrated");
+        assert_eq!(
+            error.to_string(),
+            "the database lock was lost: the lock's connection was replaced"
+        );
+        let tables = Statement::from_string(
+            DbBackend::Postgres,
+            "SELECT count(*) FROM pg_tables WHERE schemaname = current_schema()",
+        );
+        assert_eq!(one_value::<i64>(&lock.connection, tables).await, 0);
+        tokio::time::timeout(Duration::from_secs(5), lock.closed())
+            .await
+            .expect("closed resolves once the lock is released");
+        assert_eq!(
+            lock.close_reason().as_deref(),
+            Some("the lock's connection was replaced")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_replacement_is_refused_while_the_old_connection_holds_the_lock() {
+        let Some(db) = database().await else {
+            return;
+        };
+        let held = acquire_writer_lock(&db.url).await.expect("lock");
+        let mut replaced = WriterLock {
+            connection: single_connection(database_options(&db.url).expect("options")),
+            backend: held.backend,
+            close_reason: None,
+        };
+
+        let error = replaced
+            .migrate()
+            .await
+            .expect_err("a connection without the lock migrated");
+        assert_eq!(
+            error.to_string(),
+            "the database lock was lost: the lock's connection was replaced"
+        );
+        let tables = Statement::from_string(
+            DbBackend::Postgres,
+            "SELECT count(*) FROM pg_tables WHERE schemaname = current_schema()",
+        );
+        assert_eq!(one_value::<i64>(&held.connection, tables).await, 0);
+        tokio::time::timeout(Duration::from_secs(5), replaced.closed())
+            .await
+            .expect("closed resolves on a connection without the lock");
+        assert_eq!(
+            replaced.close_reason().as_deref(),
+            Some("the lock's connection was replaced")
+        );
+    }
 
     #[tokio::test]
     async fn the_lock_connection_carries_keepalives_and_no_limits() {
