@@ -443,6 +443,12 @@ mod tests {
         let by_address =
             database_options("postgres:///diario?hostaddr=10.0.0.1").expect("hostaddr");
         assert_eq!(by_address.get_host(), "10.0.0.1");
+        let ipv6 = database_options("postgres://diario:hunter2@[::1]:5432/diario").expect("IPv6");
+        assert_eq!(ipv6.get_host(), "::1");
+        let overridden =
+            database_options("postgres://diario:hunter2@[::1]/diario?host=db.internal")
+                .expect("IPv6 and a host key");
+        assert_eq!(overridden.get_host(), "db.internal");
         let refused = [
             "host=db user=diario dbname=diario",
             "postgres://diario:hunter2@h1,h2/diario",

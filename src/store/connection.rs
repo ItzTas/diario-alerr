@@ -38,8 +38,17 @@ pub(crate) fn database_options(database_url: &str) -> Result<PgConnectOptions, S
     if url.host_str().is_none_or(str::is_empty) && !host_in_query {
         return Err(StoreError::InvalidUrl(NOT_A_POSTGRES_ADDRESS));
     }
-    let options = PgConnectOptions::from_url(&keys_sqlx_reads(url)?)
+    // The url crate keeps an IPv6 host in brackets, and sqlx would look "[::1]" up as a name.
+    let bare_ipv6 = url
+        .host_str()
+        .and_then(|host| host.strip_prefix('[')?.strip_suffix(']'))
+        .filter(|_| !host_in_query)
+        .map(str::to_owned);
+    let mut options = PgConnectOptions::from_url(&keys_sqlx_reads(url)?)
         .map_err(|_| StoreError::InvalidUrl(NOT_A_POSTGRES_ADDRESS))?;
+    if let Some(address) = bare_ipv6 {
+        options = options.host(&address);
+    }
     if options.get_host().contains(',') {
         return Err(StoreError::InvalidUrl(NOT_A_POSTGRES_ADDRESS));
     }
