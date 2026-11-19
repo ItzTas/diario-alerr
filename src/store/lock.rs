@@ -35,7 +35,9 @@ pub struct WriterLock {
 }
 
 pub async fn acquire_writer_lock(database_url: &str) -> Result<WriterLock, StoreError> {
-    let connection = single_connection(database_options(database_url)?);
+    // Keeps Postgres's notices out of the log, such as the migrations' "already exists, skipping".
+    let options = database_options(database_url)?.options([("client_min_messages", "warning")]);
+    let connection = single_connection(options);
     let Ok(taken) = timeout(CONNECT_TIMEOUT, try_lock(&connection)).await else {
         return Err(StoreError::Timeout(CONNECTING));
     };
@@ -170,6 +172,7 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 
     use super::{WRITER_LOCK_ID, WriterLock, acquire_writer_lock, single_connection};
+    use crate::logtest::captured;
     use crate::postgres::database;
     use crate::store::connection::database_options;
 
@@ -180,6 +183,33 @@ mod tests {
             .expect("a row")
             .try_get_by_index(0)
             .expect("a value")
+    }
+
+    #[test]
+    fn postgres_notices_stay_out_of_the_log() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let Some(db) = runtime.block_on(database()) else {
+            return;
+        };
+        let lock = runtime
+            .block_on(acquire_writer_lock(&db.url))
+            .expect("lock");
+
+        let events = captured(|| {
+            runtime.block_on(lock.migrate()).expect("migrate");
+            runtime.block_on(lock.migrate()).expect("migrate again");
+        });
+
+        let logged = |text: &str| {
+            events
+                .iter()
+                .any(|event| event.iter().any(|(_, value)| value.contains(text)))
+        };
+        assert!(logged("No pending migrations"), "{events:?}");
+        assert!(!logged("skipping"), "{events:?}");
     }
 
     #[tokio::test]
