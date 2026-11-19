@@ -39,8 +39,8 @@ const LAST_ISSUED_SEQ: &str = "SELECT GREATEST(
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
-    #[error("DATABASE_URL is not a valid Postgres address")]
-    InvalidUrl,
+    #[error("{0}")]
+    InvalidUrl(&'static str),
     #[error("the monitor state was never initialized")]
     NotInitialized,
     #[error("another diario-alerr process holds the database lock")]
@@ -432,6 +432,7 @@ mod tests {
             "postgresql://diario:hunter2@db.internal/diario",
             "postgres://diario:hunter2@db.internal/diario?sslnegotiation=postgres&connect_timeout=5&tcp_user_timeout=5&keepalives=1&keepalives_idle=5&keepalives_interval=5&keepalives_retries=3&target_session_attrs=any&channel_binding=disable&load_balance_hosts=disable",
             "postgres://diario:hunter2@db.internal/diario?options[application_name]=x",
+            "postgres://diario:hunter2@db.internal/diario?channel_binding=prefer",
         ];
         for url in accepted {
             let options = database_options(url).expect(url);
@@ -449,10 +450,29 @@ mod tests {
             "postgres://diario:hunter2@db/diario?Password=x",
         ];
         for url in refused {
-            assert!(
-                matches!(database_options(url), Err(StoreError::InvalidUrl)),
+            let error = database_options(url).expect_err(url);
+            assert!(matches!(error, StoreError::InvalidUrl(_)), "{url}");
+            assert_eq!(
+                error.to_string(),
+                "DATABASE_URL is not a valid Postgres address",
                 "{url}"
             );
+        }
+        let not_honoured = [
+            ("channel_binding", "require"),
+            ("channel_binding", "sometimes"),
+            ("sslnegotiation", "direct"),
+            ("target_session_attrs", "read-write"),
+            ("target_session_attrs", "read-only"),
+        ];
+        for (key, value) in not_honoured {
+            let url = with_query(URL, &format!("{key}={value}"));
+            let error = database_options(&url).expect_err(&url);
+            assert!(matches!(error, StoreError::InvalidUrl(_)), "{url}");
+            let text = error.to_string();
+            assert!(text.starts_with("DATABASE_URL's "), "{text}");
+            assert!(text.contains(key), "{text}");
+            assert!(!text.contains(value), "{text}");
         }
     }
 
@@ -474,9 +494,11 @@ mod tests {
             "Password",
             "passfile",
         ];
+        let mut errors = Vec::new();
         let events = captured(|| {
             for key in keys {
-                let _ = database_options(&with_query(URL, &format!("{key}={value}")));
+                let parsed = database_options(&with_query(URL, &format!("{key}={value}")));
+                errors.extend(parsed.err().map(|error| format!("{error} {error:?}")));
             }
         });
         let leaked: Vec<&(String, String)> = events
@@ -485,6 +507,10 @@ mod tests {
             .filter(|(_, logged)| logged.contains(value))
             .collect();
         assert!(leaked.is_empty(), "{leaked:?}");
+        assert!(
+            errors.iter().all(|error| !error.contains(value)),
+            "{errors:?}"
+        );
     }
 
     #[tokio::test]

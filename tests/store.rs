@@ -827,13 +827,13 @@ async fn invalid_url_never_echoes_the_address() {
         let Err(error) = Store::new(url) else {
             panic!("the store accepted {url}")
         };
-        assert!(matches!(error, StoreError::InvalidUrl), "{url}");
+        assert!(matches!(error, StoreError::InvalidUrl(_)), "{url}");
         assert_hides_the_login(&error, url);
 
         let Err(error) = acquire_writer_lock(url).await else {
             panic!("the lock accepted {url}")
         };
-        assert!(matches!(error, StoreError::InvalidUrl), "{url}");
+        assert!(matches!(error, StoreError::InvalidUrl(_)), "{url}");
         assert_hides_the_login(&error, url);
     }
 }
