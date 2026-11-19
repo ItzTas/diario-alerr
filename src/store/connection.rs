@@ -31,6 +31,13 @@ pub(crate) fn database_options(database_url: &str) -> Result<PgConnectOptions, S
     }
     let url =
         Url::parse(database_url).map_err(|_| StoreError::InvalidUrl(NOT_A_POSTGRES_ADDRESS))?;
+    // Without a host, sqlx would pick one from PGHOST, a local socket or localhost.
+    let host_in_query = url
+        .query_pairs()
+        .any(|(key, value)| (key == "host" || key == "hostaddr") && !value.is_empty());
+    if url.host_str().is_none_or(str::is_empty) && !host_in_query {
+        return Err(StoreError::InvalidUrl(NOT_A_POSTGRES_ADDRESS));
+    }
     let options = PgConnectOptions::from_url(&keys_sqlx_reads(url)?)
         .map_err(|_| StoreError::InvalidUrl(NOT_A_POSTGRES_ADDRESS))?;
     if options.get_host().contains(',') {
