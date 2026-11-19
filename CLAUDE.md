@@ -59,7 +59,8 @@ skipping.
 - Postgres: `tests/support/postgres.rs`'s `database()` gives each test its own database. It uses
   `TEST_DATABASE_URL` when set (the compose Postgres works, see `.env.example`), and otherwise
   starts a throwaway cluster with `initdb` and `postgres` from `PATH`, listening on a local TCP
-  port.
+  port. `TEST_DATABASE_URL` must carry a password, like `DATABASE_URL`. The throwaway cluster
+  trusts every login, so its URL carries one that Postgres ignores.
   `tests/support::migrated_database` adds the migrations.
 - `pdftotext` (poppler) for the PDF scans, and for every test that starts the binary, because
   start-up checks for it.
@@ -95,13 +96,18 @@ which only the tests set.
 
 - `DATABASE_URL` (required): the Postgres address, as
   `postgres://user:password@host:port/database?sslmode=disable` (`postgresql://` works too). Put
-  the host, port, user, password and database in the URL. Whatever the URL leaves out, sqlx takes
-  from the `PG*` variables (`PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, `PGOPTIONS`,
-  `PGSSLMODE` and the rest). After those it takes the user from the system account, and a missing
-  password from `PGPASSFILE` or from `~/.pgpass` in the home of the account the plugin runs as,
-  which it finds even without `HOME`. Under the hub the `PG*` variables only arrive when set as
-  `DIARIO__PG*`. sqlx logs a malformed `.pgpass` line whole at `warn`. Such a line ends before its
-  password field, so it can show a host, port, database and user, but no password.
+  the host, port, user, password and database in the URL.
+  - The password goes in the address or in a `password` query key. A URL without one, or with an
+    empty one, is refused with `DATABASE_URL has no password: add the role's password to the
+    URL`. Without a password in the URL, sqlx would read `PGPASSWORD`, `PGPASSFILE` or
+    `~/.pgpass`, and it logs a malformed `.pgpass` line whole at `warn`. A line missing a field,
+    such as `*:*:*:secret`, puts the password where sqlx expects the user name, so the log would
+    show it. With the refusal in place, the plugin never uses `PGPASSWORD` and never reads a
+    `.pgpass` file. A database that trusts the role still needs a password in the URL, and
+    Postgres ignores it.
+  - Whatever else the URL leaves out, sqlx takes from the `PG*` variables (`PGPORT`, `PGUSER`,
+    `PGDATABASE`, `PGOPTIONS`, `PGSSLMODE` and the rest), then the user from the system account.
+    Under the hub the `PG*` variables only arrive when set as `DIARIO__PG*`.
   - The plugin connects without TLS. `sslmode=disable`, `allow` and `prefer` connect in plain
     text; `require`, `verify-ca` and `verify-full` fail at once.
   - These are refused with `DATABASE_URL is not a valid Postgres address`, which never repeats the
@@ -298,7 +304,25 @@ cannot store such an event and would reject every page from then on.
 - The second, `m20261118_000002_drop_go_tables`, drops `alert_deliveries` and `goose_db_version`
   from that same schema, one statement each and without `CASCADE`. If another object depends on
   one of them, the drop fails, nothing is dropped, and start-up stops with Postgres's error. 2.1
-  and the Go release no longer run on a database that went through it.
+  and the Go release no longer run on a database that went through it. Starting 2.1 on such a
+  database fails with `relation "monitor_state" already exists` and changes no data. It does leave
+  a new `goose_db_version` table with one version-0 row, which 2.2 ignores and never drops,
+  because the drop migration is already recorded. Drop it by hand.
+- **Upgrading from 2.1.** The first 2.2 start creates `seaql_migrations` and drops
+  `alert_deliveries` and `goose_db_version`. The plugin's role therefore needs `CREATE` on the
+  current schema and must own both tables, which 2.1 never needed after its own first start.
+  Without them the start fails with `permission denied` and changes nothing, but under the hub it
+  becomes a restart loop. Before the first 2.2 start, run these as the plugin's role:
+
+  ```sql
+  SELECT has_schema_privilege(current_user, current_schema(), 'CREATE');
+  SELECT tablename, tableowner FROM pg_tables
+  WHERE schemaname = current_schema() AND tablename IN ('alert_deliveries', 'goose_db_version');
+  ```
+
+  The first must return `t`, and the second must list both tables with the plugin's role as
+  `tableowner`. Take a `pg_dump` of the database before that start, because once 2.2 has run, 2.1
+  cannot use the database again.
 - A schema change is a new module in `src/migration/` and a new entry at the end of
   `Migrator::migrations`. **Never edit a migration that already exists, nor the files in
   `sql/schema/`**: they are the first migration's input.

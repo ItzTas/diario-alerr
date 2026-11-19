@@ -103,7 +103,11 @@ database layer writes.
 - The second, `m20261118_000002_drop_go_tables`, drops `alert_deliveries` and `goose_db_version`
   from that same schema, one statement each and without `CASCADE`. If another object depends on
   one of them, the drop fails, nothing is dropped, and start-up stops with Postgres's error. 2.1
-  and the Go release no longer run on a database that went through it.
+  and the Go release no longer run on a database that went through it. Starting 2.1 on such a
+  database fails with `relation "monitor_state" already exists` and changes no data. It does leave
+  a new `goose_db_version` table with one version-0 row, which 2.2 ignores and never drops,
+  because the drop migration is already recorded. Drop it by hand. What the role needs for the
+  first 2.2 start is in `CLAUDE.md` (Persistence).
 - A schema change is a new module in `src/migration/` and a new entry at the end of
   `Migrator::migrations`. **Never edit a migration that already exists, nor the files in
   `sql/schema/`**: they are the first migration's input.
@@ -163,9 +167,9 @@ database layer writes.
 - Every dependency is checked on crates.io before it goes into `Cargo.toml`. Unicode crates are
   pinned with `=` so their Unicode version matches the Go release's vectors.
 - `sea-orm` and `sea-orm-migration` are pinned with `=` at 2.0.4, with default features off and
-  only the Postgres, tokio and chrono ones on. `sea-orm-migration` turns sea-orm's default
-  features back on; that was accepted when the two crates went in. sqlx gets no TLS feature:
-  `cargo tree -e features -i sqlx-core | grep -c _tls` stays 0.
+  only `macros` and the Postgres, tokio and chrono ones on. `sea-orm-migration` turns sea-orm's
+  default features back on; that was accepted when the two crates went in. sqlx gets no TLS
+  feature: `cargo tree -e features -i sqlx-core | grep -c _tls` stays 0.
 - After any change to `Cargo.toml`, set these back with `cargo update -p <crate> --precise
   <version>`: `sqlx` 0.9.0, `nix` 0.31.3, `uuid` 1.29.0, `winnow` 1.0.4, `toml_edit`
   0.25.17+spec-1.1.0 and `toml_datetime` 1.1.2+spec-1.1.0 (`libsqlite3-sys` follows sqlx to
@@ -174,10 +178,10 @@ database layer writes.
   keep their versions, above all `regex` 1.13.1, `regex-syntax` 0.8.11 and the Unicode crates,
   whose tables the golden vectors depend on.
 - `libsqlite3-sys` is in `Cargo.lock` and never compiled. The sqlx features that sea-orm's
-  defaults turn on carry weak `sqlx-sqlite?/…` edges, and cargo keeps their targets in the lock
-  (cargo#10801). `cargo tree -i libsqlite3-sys --target all -e all` prints nothing. An audit that
-  reads the lock still reports its advisory; look again when sqlx 0.9.1 is two weeks old, after
-  2026-12-02.
+  defaults turn on carry weak `sqlx-sqlite?/…` edges, and cargo keeps the packages those edges
+  name in the lock (cargo#10801). `cargo tree -i libsqlite3-sys --target all -e all` prints
+  nothing. An audit that reads the lock still reports its advisory; look again when sqlx 0.9.1 is
+  two weeks old, after 2026-12-02.
 - The image builds on the build machine's platform with `cargo zigbuild` for
   `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`. The final stage has only `COPY`
   instructions, so no emulation is needed. `poppler-utils` is not in the image; the hub installs
