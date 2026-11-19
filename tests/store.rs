@@ -10,6 +10,7 @@ use diario_alerr::store::{
     EditionRecord, LOCK_CHECK_EVERY, LOCK_CHECK_LIMIT, SequencedAlert, Store, StoreError,
     WriterLock, acquire_writer_lock,
 };
+use reqwest::Url;
 use tokio::net::TcpListener;
 use tokio_postgres::{Client, NoTls};
 
@@ -126,6 +127,13 @@ fn with_login(url: &str, login: &str) -> String {
     let authority_end = rest.find('/').unwrap_or(rest.len());
     let host_start = rest[..authority_end].rfind('@').map_or(0, |at| at + 1);
     format!("{scheme}://{login}@{}", &rest[host_start..])
+}
+
+fn host_and_port(url: &str) -> String {
+    let url = Url::parse(url).expect("a postgres:// URL");
+    let host = url.host_str().expect("a host in the URL");
+    let port = url.port().expect("a port in the URL");
+    format!("{host}:{port}")
 }
 
 fn with_query(url: &str, parameter: &str) -> String {
@@ -695,6 +703,9 @@ async fn writer_lock_notices_its_connection_ending() {
         "{reason}"
     );
     assert!(!reason.contains(&db.url), "{reason}");
+    let address = host_and_port(&db.url);
+    assert!(db.url.contains(&address), "{address} is not in the URL");
+    assert!(!reason.contains(&address), "{reason}");
 }
 
 #[tokio::test]
