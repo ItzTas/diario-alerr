@@ -273,8 +273,6 @@ mod tests {
 
     use crate::postgres::database;
     use chrono::{DateTime, Utc};
-    use monitor_hub_plugin::migrate::up;
-    use tokio_postgres::NoTls;
 
     use super::{
         CycleOutcome, Gazette, Monitor, MonitorOptions, alert_for, listing_failed, read_failed,
@@ -283,7 +281,7 @@ mod tests {
     use crate::domain::Edition;
     use crate::gazette::GazetteError;
     use crate::logtest::{captured, logged};
-    use crate::store::{MIGRATIONS, Store, StoreError};
+    use crate::store::{Store, StoreError, acquire_writer_lock};
     use crate::text::Hits;
 
     struct EveryEditionMatches(Vec<Edition>);
@@ -318,11 +316,8 @@ mod tests {
         let Some(db) = database().await else {
             return;
         };
-        let (mut client, connection) = tokio_postgres::connect(&db.url, NoTls)
-            .await
-            .expect("connect");
-        tokio::spawn(connection);
-        up(&mut client, MIGRATIONS).await.expect("migrate");
+        let lock = acquire_writer_lock(&db.url).await.expect("lock");
+        lock.migrate().await.expect("migrate");
         let editions = (1..=4)
             .map(|id| Edition {
                 id,

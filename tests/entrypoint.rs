@@ -48,14 +48,14 @@ fn single_error(exited: &Exited) -> Value {
     error.clone()
 }
 
-async fn goose_versions(client: &Client) -> Vec<(i64, bool)> {
+async fn applied_migrations(client: &Client) -> Vec<(String, i64)> {
     client
         .query(
-            "SELECT version_id, is_applied FROM goose_db_version ORDER BY id",
+            "SELECT version, applied_at FROM seaql_migrations ORDER BY version",
             &[],
         )
         .await
-        .expect("goose_db_version")
+        .expect("seaql_migrations")
         .iter()
         .map(|row| (row.get(0), row.get(1)))
         .collect()
@@ -154,7 +154,7 @@ async fn second_process_refuses_to_start() {
     };
     let _held = acquire_writer_lock(&db.url).await.expect("hold the lock");
     let admin = connect(&db.url).await;
-    let before = goose_versions(&admin).await;
+    let before = applied_migrations(&admin).await;
     let sockets = socket_dir();
 
     let exited = run_plugin(
@@ -178,7 +178,7 @@ async fn second_process_refuses_to_start() {
         exited.stderr
     );
     assert!(!exited.stderr.contains(&db.url), "{}", exited.stderr);
-    assert_eq!(goose_versions(&admin).await, before);
+    assert_eq!(applied_migrations(&admin).await, before);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -311,7 +311,7 @@ async fn losing_the_database_lock_exits_1() {
     assert_eq!(error["@message"], "fatal", "{}", exited.stderr);
     let text = error["error"].as_str().expect("an error field");
     assert!(
-        text.starts_with("the database lock was lost: ") && text.contains("terminating connection"),
+        text.starts_with("the database lock was lost: the lock's connection"),
         "{}",
         exited.stderr
     );

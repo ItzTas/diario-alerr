@@ -1,46 +1,25 @@
 mod connection;
 mod entity;
+mod lock;
 
 use std::error::Error;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use monitor_hub_plugin::Notifier;
-use monitor_hub_plugin::migrate::{MigrateError, Migration, up};
 use sea_orm::sea_query::{Expr, ExprTrait, OnConflict, PgFunc};
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, ConnAcquireErr, ConnectionTrait, DatabaseConnection,
     DatabaseTransaction, DbBackend, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
     RuntimeErr, Statement, TransactionTrait, TryInsertResult, Value,
 };
-use tokio::task::{JoinError, JoinHandle};
-use tokio_postgres::{Client, Config, NoTls};
 
 use crate::domain::Alert;
-use connection::{CONNECT_TIMEOUT, Limits, POOL_LIMITS, database_options, pool};
+use connection::{Limits, POOL_LIMITS, database_options, pool};
 use entity::{alerts, monitor_state, seen_editions};
-
-pub const MIGRATIONS: &[Migration] = &[
-    Migration {
-        version: 1,
-        name: "00001_monitor.sql",
-        sql: include_str!("../sql/schema/00001_monitor.sql"),
-    },
-    Migration {
-        version: 2,
-        name: "00002_acked_seq.sql",
-        sql: include_str!("../sql/schema/00002_acked_seq.sql"),
-    },
-];
-
-pub const WRITER_LOCK_ID: i64 = 0x6469_6172_696f;
-
-const KEEPALIVES_IDLE: Duration = Duration::from_secs(30);
-const KEEPALIVES_INTERVAL: Duration = Duration::from_secs(10);
-const KEEPALIVES_RETRIES: u32 = 3;
-const TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
-
-const TRY_WRITER_LOCK: &str = "SELECT pg_try_advisory_lock($1)";
+pub(crate) use lock::LOCK_LOST;
+pub use lock::{
+    LOCK_CHECK_EVERY, LOCK_CHECK_LIMIT, WRITER_LOCK_ID, WriterLock, acquire_writer_lock,
+};
 
 // Raw SQL on purpose: this UPDATE locks the state row before the alert's INSERT, so the order of
 // the seq values is the order of the commits.
@@ -68,12 +47,12 @@ pub enum StoreError {
     Locked,
     #[error("{0} timed out")]
     Timeout(&'static str),
+    #[error("{LOCK_LOST}: {0}")]
+    LockLost(String),
+    #[error("{0}")]
+    Migration(String),
     #[error(transparent)]
     Database(DbErr),
-    #[error(transparent)]
-    LockConnection(#[from] tokio_postgres::Error),
-    #[error(transparent)]
-    Migrate(#[from] MigrateError),
 }
 
 impl From<DbErr> for StoreError {
@@ -121,51 +100,6 @@ pub struct EditionRecord {
 pub struct SequencedAlert {
     pub seq: i64,
     pub alert: Alert,
-}
-
-pub struct WriterLock {
-    client: Client,
-    connection: Option<JoinHandle<Result<(), tokio_postgres::Error>>>,
-    close_reason: Option<String>,
-}
-
-pub async fn acquire_writer_lock(database_url: &str) -> Result<WriterLock, StoreError> {
-    let config = lock_config(database_url)?;
-    let (client, connection) = tokio::time::timeout(CONNECT_TIMEOUT, config.connect(NoTls))
-        .await
-        .map_err(|_| StoreError::Timeout("connecting to the database for the writer lock"))??;
-    let connection = tokio::spawn(connection);
-    let locked: bool = client
-        .query_one(TRY_WRITER_LOCK, &[&WRITER_LOCK_ID])
-        .await?
-        .try_get(0)?;
-    if !locked {
-        return Err(StoreError::Locked);
-    }
-    Ok(WriterLock {
-        client,
-        connection: Some(connection),
-        close_reason: None,
-    })
-}
-
-impl WriterLock {
-    pub async fn migrate(&mut self) -> Result<Vec<i64>, StoreError> {
-        Ok(up(&mut self.client, MIGRATIONS).await?)
-    }
-
-    pub async fn closed(&mut self) {
-        let Some(connection) = self.connection.as_mut() else {
-            return;
-        };
-        let ended = connection.await;
-        self.close_reason = reason_for(ended);
-        self.connection = None;
-    }
-
-    pub fn close_reason(&self) -> Option<String> {
-        self.close_reason.clone()
-    }
 }
 
 #[derive(Clone)]
@@ -339,29 +273,6 @@ fn statement<const N: usize>(sql: &str, values: [Value; N]) -> Statement {
     Statement::from_sql_and_values(DbBackend::Postgres, sql, values)
 }
 
-fn lock_config(database_url: &str) -> Result<Config, StoreError> {
-    let mut config = parse(database_url)?;
-    config
-        .keepalives(true)
-        .keepalives_idle(KEEPALIVES_IDLE)
-        .keepalives_interval(KEEPALIVES_INTERVAL)
-        .keepalives_retries(KEEPALIVES_RETRIES)
-        .tcp_user_timeout(TCP_USER_TIMEOUT);
-    Ok(config)
-}
-
-fn parse(database_url: &str) -> Result<Config, StoreError> {
-    database_url.parse().map_err(|_| StoreError::InvalidUrl)
-}
-
-fn reason_for(ended: Result<Result<(), tokio_postgres::Error>, JoinError>) -> Option<String> {
-    match ended {
-        Ok(Ok(())) => None,
-        Ok(Err(error)) => Some(chain_text(&error)),
-        Err(error) => Some(chain_text(&error)),
-    }
-}
-
 pub(crate) fn chain_text(error: &(dyn Error + 'static)) -> String {
     let mut text = error.to_string();
     let mut cause = error.source();
@@ -418,12 +329,11 @@ mod tests {
     use crate::postgres::{Database, database};
     use chrono::DateTime;
     use futures_util::future::try_join_all;
-    use monitor_hub_plugin::migrate::up;
     use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
     use tokio_postgres::{Client, NoTls};
 
     use super::connection::{Limits, POOL_LIMITS, POOL_SIZE, database_options, with_limits};
-    use super::{MIGRATIONS, Store, StoreError, acquire_writer_lock, chain_text, lock_config};
+    use super::{Store, StoreError, acquire_writer_lock, chain_text};
     use crate::domain::Alert;
     use crate::logtest::captured;
 
@@ -443,8 +353,8 @@ mod tests {
 
     async fn migrated() -> Option<Database> {
         let database = database().await?;
-        let mut client = connect(&database.url).await;
-        up(&mut client, MIGRATIONS).await.expect("migrate");
+        let lock = acquire_writer_lock(&database.url).await.expect("lock");
+        lock.migrate().await.expect("migrate");
         Some(database)
     }
 
@@ -457,14 +367,6 @@ mod tests {
             .expect("a row")
             .try_get_by_index(0)
             .expect("the setting")
-    }
-
-    async fn show_on_client(client: &Client, setting: &str) -> String {
-        client
-            .query_one(&format!("SHOW {setting}"), &[])
-            .await
-            .expect("show")
-            .get(0)
     }
 
     fn with_query(url: &str, parameter: &str) -> String {
@@ -483,20 +385,6 @@ mod tests {
             body: "body".to_owned(),
             published: at,
         }
-    }
-
-    fn assert_keepalives(config: &tokio_postgres::Config) {
-        assert!(config.get_keepalives());
-        assert_eq!(config.get_keepalives_idle(), Duration::from_secs(30));
-        assert_eq!(
-            config.get_keepalives_interval(),
-            Some(Duration::from_secs(10))
-        );
-        assert_eq!(config.get_keepalives_retries(), Some(3));
-        assert_eq!(
-            config.get_tcp_user_timeout(),
-            Some(&Duration::from_secs(60))
-        );
     }
 
     #[derive(Debug, thiserror::Error)]
@@ -525,13 +413,6 @@ mod tests {
     fn pool_connections_get_limits_and_server_keepalives() {
         let options = with_limits(database_options(URL).expect("options"), POOL_LIMITS);
         assert_eq!(options.get_options(), Some(POOL_OPTIONS));
-    }
-
-    #[test]
-    fn the_lock_connection_gets_keepalives_and_no_limits() {
-        let config = lock_config(URL).expect("config");
-        assert_eq!(config.get_options(), None);
-        assert_keepalives(&config);
     }
 
     #[test]
@@ -623,16 +504,6 @@ mod tests {
         for (setting, value) in settings {
             assert_eq!(show(store.connection(), setting).await, value, "{setting}");
         }
-    }
-
-    #[tokio::test]
-    async fn pool_and_lock_connections_carry_their_limits() {
-        let Some(db) = migrated().await else {
-            return;
-        };
-        let lock = acquire_writer_lock(&db.url).await.expect("lock");
-        assert_eq!(show_on_client(&lock.client, "statement_timeout").await, "0");
-        assert_eq!(show_on_client(&lock.client, "lock_timeout").await, "0");
     }
 
     #[tokio::test]

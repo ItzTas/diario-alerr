@@ -293,13 +293,11 @@ mod tests {
 
     use crate::postgres::database;
     use chrono::DateTime;
-    use monitor_hub_plugin::migrate::up;
     use monitor_hub_plugin::proto::plugin_server::Plugin;
     use monitor_hub_plugin::proto::{EventsRequest, State, StatusRequest};
     use serde_json::{Value, json};
     use tokio::net::TcpListener;
     use tokio::runtime::{Builder, Runtime};
-    use tokio_postgres::NoTls;
     use tonic::Request;
 
     use super::{DiarioPlugin, HUB_AHEAD, STATUS_QUERY_LIMIT};
@@ -307,7 +305,7 @@ mod tests {
     use crate::logtest::{captured, logged};
     use crate::monitor::{Monitor, MonitorOptions};
     use crate::scheduler::Scheduler;
-    use crate::store::{MIGRATIONS, Store};
+    use crate::store::{Store, acquire_writer_lock};
 
     fn runtime() -> Runtime {
         Builder::new_current_thread()
@@ -333,9 +331,8 @@ mod tests {
     }
 
     async fn migrate(url: &str) {
-        let (mut client, connection) = tokio_postgres::connect(url, NoTls).await.expect("connect");
-        tokio::spawn(connection);
-        up(&mut client, MIGRATIONS).await.expect("migrate");
+        let lock = acquire_writer_lock(url).await.expect("lock");
+        lock.migrate().await.expect("migrate");
     }
 
     #[test]

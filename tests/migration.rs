@@ -15,7 +15,7 @@ const TODAYS_TABLES: [&str; 4] = [
     "seaql_migrations",
     "seen_editions",
 ];
-const MIGRATIONS_APPLIED: &str = "SELECT version FROM seaql_migrations ORDER BY version";
+const SEAQL_VERSIONS: &str = "SELECT version FROM seaql_migrations ORDER BY version";
 const GOOSE_VERSIONS: &str = "SELECT version_id::text FROM goose_db_version ORDER BY id";
 const SEQUENCE_STATE: &str = "SELECT format('%s %s', last_value, is_called) FROM alerts_seq_seq";
 
@@ -65,7 +65,7 @@ async fn a_new_database_gets_todays_tables_and_no_go_tables() {
 
     assert_eq!(table_names(&client).await, TODAYS_TABLES);
     assert_eq!(
-        texts(&client, MIGRATIONS_APPLIED).await,
+        texts(&client, SEAQL_VERSIONS).await,
         [GOOSE_SCHEMA, DROP_GO_TABLES]
     );
     let acked_seq = client
@@ -122,7 +122,7 @@ async fn a_database_at_goose_version_2_is_adopted_without_loss() {
     assert_eq!(kept_data(&client).await, before);
     assert_eq!(table_names(&client).await, TODAYS_TABLES);
     assert_eq!(
-        texts(&client, MIGRATIONS_APPLIED).await,
+        texts(&client, SEAQL_VERSIONS).await,
         [GOOSE_SCHEMA, DROP_GO_TABLES]
     );
 }
@@ -342,7 +342,7 @@ async fn a_view_stops_the_drop(table: &str, view: &str) {
 
     let refusal = format!("cannot drop table {table} because other objects depend on it");
     assert!(failed.to_string().contains(&refusal), "{failed}");
-    assert_eq!(texts(&client, MIGRATIONS_APPLIED).await, [GOOSE_SCHEMA]);
+    assert_eq!(texts(&client, SEAQL_VERSIONS).await, [GOOSE_SCHEMA]);
     let tables = table_names(&client).await;
     assert!(
         tables.contains(&"alert_deliveries".to_owned()),

@@ -6,6 +6,7 @@ use std::time::Duration;
 use chrono::{DateTime, TimeDelta, Utc};
 use diario_alerr::domain::Alert;
 use diario_alerr::gazette::{Client, HTTP_TIMEOUT};
+use diario_alerr::migration::{DROP_GO_TABLES, GOOSE_SCHEMA};
 use diario_alerr::monitor::{CycleOutcome, Monitor, MonitorOptions};
 use diario_alerr::store::{EditionRecord, SequencedAlert, Store};
 use monitor_hub_plugin::proto::{
@@ -21,7 +22,10 @@ use tonic_prost::ProstCodec;
 
 use support::gazette_site::{GazetteSite, SiteEdition};
 use support::process::spawn_plugin;
-use support::{SIGNAL_WAIT, fixed_clock, migrated_database, require_pdftotext, utc};
+use support::schema::{goose_era_database, seed_rows, table_names};
+use support::{
+    SIGNAL_WAIT, admin, database, fixed_clock, migrated_database, require_pdftotext, utc,
+};
 
 const CHECK_ATTEMPTS: usize = 5;
 const ANNOUNCEMENT_WAIT: Duration = Duration::from_secs(20);
@@ -381,4 +385,58 @@ async fn watch_signals_at_once_and_after_each_recorded_alert() {
         .map(|stored| (stored.alert.id, stored.seq))
         .collect();
     assert_eq!(recorded, [("edition-702".to_owned(), announced)]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_database_left_by_2_1_keeps_its_alerts_and_positions() {
+    if !require_pdftotext() {
+        return;
+    }
+    let Some(db) = database().await else {
+        return;
+    };
+    let admin = admin(&db.url).await;
+    goose_era_database(&admin, &[1, 2], &[1, 2]).await;
+    seed_rows(&admin, true).await;
+    let seeded: Vec<(i64, String)> = admin
+        .query("SELECT seq, id FROM alerts ORDER BY seq", &[])
+        .await
+        .expect("the seeded alerts")
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    assert_eq!(seeded.len(), 3, "{seeded:?}");
+    let site = GazetteSite::start(vec![]).await;
+    let sockets = tempfile::tempdir().expect("socket directory");
+    let plugin = spawn_plugin(&[
+        ("DATABASE_URL", &db.url),
+        ("WATCH_TERMS", "PAULO SANTOS"),
+        ("GAZETTE_API_URL", &site.api_url()),
+        ("TMPDIR", sockets.path().to_str().expect("a UTF-8 path")),
+    ]);
+
+    let read: Vec<(i64, String)> = events(&plugin.socket, 0, 0)
+        .await
+        .into_iter()
+        .map(|event| (event.seq, event.id))
+        .collect();
+
+    assert_eq!(read, seeded);
+    let applied: Vec<String> = admin
+        .query("SELECT version FROM seaql_migrations ORDER BY version", &[])
+        .await
+        .expect("seaql_migrations")
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(applied, [GOOSE_SCHEMA, DROP_GO_TABLES]);
+    assert_eq!(
+        table_names(&admin).await,
+        [
+            "alerts",
+            "monitor_state",
+            "seaql_migrations",
+            "seen_editions"
+        ]
+    );
 }

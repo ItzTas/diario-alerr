@@ -14,11 +14,10 @@ use crate::monitor::{Monitor, MonitorOptions};
 use crate::pdf::{check_pdftotext, remove_leftovers};
 use crate::scheduler::Scheduler;
 use crate::server::DiarioPlugin;
-use crate::store::{Store, WriterLock, acquire_writer_lock};
+use crate::store::{LOCK_LOST, Store, WriterLock, acquire_writer_lock};
 use crate::timestamp::system_clock;
 
 const START_UP_LIMIT: Duration = Duration::from_secs(45);
-const LOCK_LOST: &str = "the database lock was lost";
 
 struct Started {
     lock: WriterLock,
@@ -36,7 +35,7 @@ pub async fn run() -> anyhow::Result<()> {
 async fn start_up(config: &Config, limit: Duration) -> anyhow::Result<Started> {
     let deadline = Instant::now() + limit;
     within(deadline, limit, "checking pdftotext", check_pdftotext()).await?;
-    let mut lock = within(
+    let lock = within(
         deadline,
         limit,
         "acquiring the database writer lock",
@@ -51,7 +50,7 @@ async fn start_up(config: &Config, limit: Duration) -> anyhow::Result<Started> {
         lock.migrate(),
     )
     .await?;
-    info!(versions = ?applied, "database migrations applied");
+    info!(migrations = ?applied, "database migrations applied");
     let store = Store::new(&config.database_url).context("opening the database pool")?;
     let first_read_boundary = within(
         deadline,
