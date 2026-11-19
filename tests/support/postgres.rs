@@ -87,7 +87,9 @@ async fn start() -> Result<Server, String> {
     let (dir, port, cluster) = tokio::task::spawn_blocking(start_cluster)
         .await
         .map_err(|err| format!("start the test cluster: {err}"))??;
-    let admin = format!("postgres://postgres@127.0.0.1:{port}/postgres?sslmode=disable");
+    // The cluster trusts every login; the password is there because the plugin refuses a URL
+    // without one.
+    let admin = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres?sslmode=disable");
     let server = Server::new(admin, Some(cluster))?;
     server
         .wait_ready()

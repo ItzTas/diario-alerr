@@ -10,6 +10,7 @@ use super::StoreError;
 
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const NOT_A_POSTGRES_ADDRESS: &str = "DATABASE_URL is not a valid Postgres address";
+const NO_PASSWORD: &str = "DATABASE_URL has no password: add the role's password to the URL";
 pub(crate) const POOL_SIZE: u32 = 4;
 pub(crate) const POOL_LIMITS: Limits = Limits {
     statement: Duration::from_secs(20),
@@ -37,6 +38,14 @@ pub(crate) fn database_options(database_url: &str) -> Result<PgConnectOptions, S
         .any(|(key, value)| (key == "host" || key == "hostaddr") && !value.is_empty());
     if url.host_str().is_none_or(str::is_empty) && !host_in_query {
         return Err(StoreError::InvalidUrl(NOT_A_POSTGRES_ADDRESS));
+    }
+    // Without a password, sqlx takes one from PGPASSWORD or .pgpass, and it logs a malformed
+    // .pgpass line whole, password included.
+    let password_in_query = url
+        .query_pairs()
+        .any(|(key, value)| key == "password" && !value.is_empty());
+    if url.password().is_none_or(str::is_empty) && !password_in_query {
+        return Err(StoreError::InvalidUrl(NO_PASSWORD));
     }
     // The url crate keeps an IPv6 host in brackets, and sqlx would look "[::1]" up as a name.
     let bare_ipv6 = url

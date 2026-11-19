@@ -433,15 +433,16 @@ mod tests {
             "postgres://diario:hunter2@db.internal/diario?sslnegotiation=postgres&connect_timeout=5&tcp_user_timeout=5&keepalives=1&keepalives_idle=5&keepalives_interval=5&keepalives_retries=3&target_session_attrs=any&channel_binding=disable&load_balance_hosts=disable",
             "postgres://diario:hunter2@db.internal/diario?options[application_name]=x",
             "postgres://diario:hunter2@db.internal/diario?channel_binding=prefer",
-            "postgres:///diario?host=db.internal",
+            "postgres:///diario?host=db.internal&password=hunter2",
+            "postgres://diario@db.internal/diario?password=hunter2",
         ];
         for url in accepted {
             let options = database_options(url).expect(url);
             assert_eq!(options.get_host(), "db.internal", "{url}");
             assert_eq!(options.get_database(), Some("diario"), "{url}");
         }
-        let by_address =
-            database_options("postgres:///diario?hostaddr=10.0.0.1").expect("hostaddr");
+        let by_address = database_options("postgres:///diario?hostaddr=10.0.0.1&password=hunter2")
+            .expect("hostaddr");
         assert_eq!(by_address.get_host(), "10.0.0.1");
         let ipv6 = database_options("postgres://diario:hunter2@[::1]:5432/diario").expect("IPv6");
         assert_eq!(ipv6.get_host(), "::1");
@@ -469,6 +470,21 @@ mod tests {
             assert_eq!(
                 error.to_string(),
                 "DATABASE_URL is not a valid Postgres address",
+                "{url}"
+            );
+        }
+        let without_password = [
+            "postgres://diario@db.internal/diario",
+            "postgres://diario:@db.internal/diario",
+            "postgres://diario@db.internal/diario?password=",
+            "postgres://db.internal/diario?sslmode=disable",
+        ];
+        for url in without_password {
+            let error = database_options(url).expect_err(url);
+            assert!(matches!(error, StoreError::InvalidUrl(_)), "{url}");
+            assert_eq!(
+                error.to_string(),
+                "DATABASE_URL has no password: add the role's password to the URL",
                 "{url}"
             );
         }

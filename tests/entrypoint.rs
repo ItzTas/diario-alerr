@@ -1,6 +1,7 @@
 mod support;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 use diario_alerr::domain::Alert;
@@ -142,6 +143,43 @@ fn a_missing_pdftotext_stops_the_start_up() {
         exited.stderr
     );
     assert!(!exited.stderr.contains("hunter2"), "{}", exited.stderr);
+}
+
+#[test]
+fn a_url_without_a_password_stops_the_start_before_pgpass_is_read() {
+    if !require_pdftotext() {
+        return;
+    }
+    let marker = "PwLeakMarker77";
+    let dir = tempfile::tempdir().expect("a directory for the pgpass file");
+    let pgpass = dir.path().join("pgpass");
+    fs::write(&pgpass, format!("*:*:*:{marker}\n")).expect("write the pgpass file");
+    fs::set_permissions(&pgpass, fs::Permissions::from_mode(0o600))
+        .expect("restrict the pgpass file");
+
+    let exited = run_plugin(
+        &["plugin"],
+        &[
+            COOKIE,
+            (
+                "DATABASE_URL",
+                "postgres://diario@127.0.0.1:1/diario?sslmode=disable",
+            ),
+            ("WATCH_TERMS", "PAULO SANTOS"),
+            ("PGPASSFILE", pgpass.to_str().expect("a UTF-8 path")),
+        ],
+        EXIT_LIMIT,
+    );
+
+    assert_refused_before_the_handshake(&exited);
+    assert!(!exited.stderr.contains(marker), "{}", exited.stderr);
+    let error = single_error(&exited);
+    assert_eq!(
+        error["error"],
+        "acquiring the database writer lock: DATABASE_URL has no password: add the role's password to the URL",
+        "{}",
+        exited.stderr
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
