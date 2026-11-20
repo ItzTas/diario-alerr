@@ -15,7 +15,7 @@ const HANDSHAKE_LIMIT: Duration = Duration::from_secs(30);
 const PIPE_LIMIT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(10);
 
-pub struct RunningPlugin {
+pub struct RunningMonitor {
     pub child: Child,
     pub socket: PathBuf,
     output: Output,
@@ -33,23 +33,23 @@ struct Output {
     stderr: Receiver<String>,
 }
 
-pub fn spawn_plugin(env: &[(&str, &str)]) -> RunningPlugin {
+pub fn spawn_monitor(env: &[(&str, &str)]) -> RunningMonitor {
     let mut with_cookie = vec![COOKIE];
     with_cookie.extend_from_slice(env);
-    let mut plugin = start(&["monitor"], &with_cookie);
-    let Ok(line) = plugin.output.first_line.recv_timeout(HANDSHAKE_LIMIT) else {
-        plugin.fail("the plugin printed no handshake line within 30 seconds");
+    let mut spawned = start(&["monitor"], &with_cookie);
+    let Ok(line) = spawned.output.first_line.recv_timeout(HANDSHAKE_LIMIT) else {
+        spawned.fail("the monitor printed no handshake line within 30 seconds");
     };
     let Some(socket) = handshake_socket(&line) else {
-        plugin.fail(&format!(
+        spawned.fail(&format!(
             "the first stdout line is not a handshake: {line:?}"
         ));
     };
-    plugin.socket = socket;
-    plugin
+    spawned.socket = socket;
+    spawned
 }
 
-pub fn run_plugin(args: &[&str], env: &[(&str, &str)], limit: Duration) -> Exited {
+pub fn run_monitor(args: &[&str], env: &[(&str, &str)], limit: Duration) -> Exited {
     start(args, env).exit_within(limit)
 }
 
@@ -89,11 +89,11 @@ pub fn error_lines(stderr: &str) -> Vec<Value> {
         .collect()
 }
 
-impl RunningPlugin {
+impl RunningMonitor {
     pub fn exit_within(&mut self, limit: Duration) -> Exited {
         let deadline = Instant::now() + limit;
         loop {
-            if let Some(status) = self.child.try_wait().expect("poll the plugin") {
+            if let Some(status) = self.child.try_wait().expect("poll the monitor") {
                 return Exited {
                     status,
                     stdout: collected(&self.output.stdout),
@@ -101,7 +101,7 @@ impl RunningPlugin {
                 };
             }
             if Instant::now() >= deadline {
-                self.fail(&format!("the plugin did not exit within {limit:?}"));
+                self.fail(&format!("the monitor did not exit within {limit:?}"));
             }
             thread::sleep(POLL);
         }
@@ -111,25 +111,25 @@ impl RunningPlugin {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let stderr = collected(&self.output.stderr);
-        panic!("{problem}\nplugin stderr:\n{stderr}");
+        panic!("{problem}\nmonitor stderr:\n{stderr}");
     }
 }
 
-impl Drop for RunningPlugin {
+impl Drop for RunningMonitor {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
 
-fn start(args: &[&str], env: &[(&str, &str)]) -> RunningPlugin {
+fn start(args: &[&str], env: &[(&str, &str)]) -> RunningMonitor {
     spawn(
         Command::new(env!("CARGO_BIN_EXE_diario-alerr")).args(args),
         env,
     )
 }
 
-fn spawn(command: &mut Command, env: &[(&str, &str)]) -> RunningPlugin {
+fn spawn(command: &mut Command, env: &[(&str, &str)]) -> RunningMonitor {
     let mut child = command
         .env_clear()
         .env("PATH", env::var_os("PATH").unwrap_or_default())
@@ -142,7 +142,7 @@ fn spawn(command: &mut Command, env: &[(&str, &str)]) -> RunningPlugin {
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     let (first_line, stdout) = read_stdout(stdout);
-    RunningPlugin {
+    RunningMonitor {
         child,
         socket: PathBuf::new(),
         output: Output {

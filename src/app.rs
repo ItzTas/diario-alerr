@@ -13,7 +13,7 @@ use crate::gazette::{Client, HTTP_TIMEOUT};
 use crate::monitor::{Monitor, MonitorOptions};
 use crate::pdf::{check_pdftotext, remove_leftovers};
 use crate::scheduler::Scheduler;
-use crate::server::DiarioPlugin;
+use crate::server::DiarioMonitor;
 use crate::store::{LOCK_LOST, Store, WriterLock, acquire_writer_lock};
 use crate::timestamp::system_clock;
 
@@ -118,11 +118,11 @@ async fn serve_until_stopped(started: Started) -> anyhow::Result<()> {
     let notifier = monitor.notifier().clone();
     notifier.events_recorded(newest_alert);
     let scheduler = Scheduler::new(Arc::new(monitor));
-    let plugin =
-        DiarioPlugin::new(Arc::clone(&scheduler)).with_first_read_boundary(first_read_boundary);
+    let served =
+        DiarioMonitor::new(Arc::clone(&scheduler)).with_first_read_boundary(first_read_boundary);
     let cycles = tokio::spawn(scheduler.run());
     let ended = tokio::select! {
-        served = serve(plugin, notifier) => served.context("serving the plugin"),
+        outcome = serve(served, notifier) => outcome.context("serving the monitor"),
         () = lock.closed() => Err(lock_lost(&lock)),
     };
     cycles.abort();

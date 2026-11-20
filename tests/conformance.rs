@@ -51,7 +51,7 @@ fn text(path: &Path) -> String {
         .to_owned()
 }
 
-fn plugin_conformance(url: &str, api_url: &str, sockets: &TempDir, data: &TempDir) -> Conformance {
+fn monitor_conformance(url: &str, api_url: &str, sockets: &TempDir, data: &TempDir) -> Conformance {
     let mut conformance = Conformance::new(env!("CARGO_BIN_EXE_diario-alerr"));
     conformance.command.push("monitor".to_owned());
     let path = env::var("PATH").unwrap_or_default();
@@ -74,7 +74,7 @@ fn plugin_conformance(url: &str, api_url: &str, sockets: &TempDir, data: &TempDi
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn plugin_passes_the_hub_conformance_suite() {
+async fn the_monitor_passes_the_hub_conformance_suite() {
     if !require_pdftotext() {
         return;
     }
@@ -85,7 +85,7 @@ async fn plugin_passes_the_hub_conformance_suite() {
     seed_two_alerts(&db.url, site.api_url()).await;
     let sockets = tempfile::tempdir().expect("socket directory");
     let data = tempfile::tempdir().expect("data directory");
-    let conformance = plugin_conformance(&db.url, &site.api_url(), &sockets, &data);
+    let conformance = monitor_conformance(&db.url, &site.api_url(), &sockets, &data);
 
     let outcome = tokio::task::spawn_blocking(move || run(&conformance))
         .await

@@ -10,7 +10,7 @@ use tracing::error;
 const RUNTIME_SHUTDOWN_LIMIT: Duration = Duration::from_millis(500);
 
 fn main() -> ExitCode {
-    if !launched_as_plugin() {
+    if !launched_as_monitor() {
         eprintln!("{NOT_LAUNCHED_BY_HUB}");
         return ExitCode::FAILURE;
     }
@@ -30,7 +30,7 @@ fn main() -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn launched_as_plugin() -> bool {
+fn launched_as_monitor() -> bool {
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
     arguments == ["monitor"] && launched_by_hub()
 }

@@ -536,7 +536,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn requests_name_the_plugin_and_its_version() {
+    async fn requests_name_the_monitor_and_its_version() {
         let (agents, mut received) = tokio::sync::mpsc::unbounded_channel();
         let router = Router::new().route(
             "/",

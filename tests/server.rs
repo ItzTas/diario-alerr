@@ -8,7 +8,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use diario_alerr::domain::{Alert, Edition};
 use diario_alerr::monitor::{CycleOutcome, Monitor, MonitorOptions};
 use diario_alerr::scheduler::Scheduler;
-use diario_alerr::server::DiarioPlugin;
+use diario_alerr::server::DiarioMonitor;
 use diario_alerr::store::{EditionRecord, Store};
 use diario_alerr::text::Hits;
 use monitor_hub_sdk::Monitor as _;
@@ -59,35 +59,35 @@ async fn prepared(url: &str, fake: FakeGazette) -> Arc<Scheduler<FakeGazette>> {
     scheduler
 }
 
-fn plugin(scheduler: &Arc<Scheduler<FakeGazette>>) -> DiarioPlugin<FakeGazette> {
-    DiarioPlugin::new(Arc::clone(scheduler))
+fn served(scheduler: &Arc<Scheduler<FakeGazette>>) -> DiarioMonitor<FakeGazette> {
+    DiarioMonitor::new(Arc::clone(scheduler))
 }
 
 async fn events(
-    plugin: &DiarioPlugin<FakeGazette>,
+    served: &DiarioMonitor<FakeGazette>,
     after: i64,
     limit: i32,
 ) -> Result<Vec<Event>, tonic::Status> {
-    plugin
+    served
         .events(Request::new(EventsRequest { after, limit }))
         .await
         .map(|response| response.into_inner().events)
 }
 
-async fn page(plugin: &DiarioPlugin<FakeGazette>, after: i64, limit: i32) -> Vec<Event> {
-    events(plugin, after, limit).await.expect("events")
+async fn page(served: &DiarioMonitor<FakeGazette>, after: i64, limit: i32) -> Vec<Event> {
+    events(served, after, limit).await.expect("events")
 }
 
-async fn status(plugin: &DiarioPlugin<FakeGazette>) -> StatusResponse {
-    plugin
+async fn status(served: &DiarioMonitor<FakeGazette>) -> StatusResponse {
+    served
         .status(Request::new(StatusRequest {}))
         .await
         .expect("status")
         .into_inner()
 }
 
-async fn check(plugin: &DiarioPlugin<FakeGazette>) -> CheckResponse {
-    plugin
+async fn check(served: &DiarioMonitor<FakeGazette>) -> CheckResponse {
+    served
         .check(Request::new(CheckRequest {}))
         .await
         .expect("check")
@@ -147,29 +147,29 @@ async fn insert_again(url: &str, id: &str) {
         .expect("insert an alert id that exists");
 }
 
-async fn started_after_three_alerts(url: &str) -> (DiarioPlugin<FakeGazette>, Vec<i64>) {
-    let (_, plugin, all) = scheduled_after_three_alerts(url).await;
-    (plugin, all)
+async fn started_after_three_alerts(url: &str) -> (DiarioMonitor<FakeGazette>, Vec<i64>) {
+    let (_, served, all) = scheduled_after_three_alerts(url).await;
+    (served, all)
 }
 
 async fn scheduled_after_three_alerts(
     url: &str,
 ) -> (
     Arc<Scheduler<FakeGazette>>,
-    DiarioPlugin<FakeGazette>,
+    DiarioMonitor<FakeGazette>,
     Vec<i64>,
 ) {
     let scheduler = prepared(url, FakeGazette::new(vec![])).await;
     add_alerts(url, 2).await;
     let store = scheduler.monitor().store();
     let boundary = store.last_issued_seq().await.expect("last issued seq");
-    let plugin = plugin(&scheduler).with_first_read_boundary(boundary);
+    let served = served(&scheduler).with_first_read_boundary(boundary);
     add_alert(url, "edition-late").await;
     let stored = store.alerts_after(0, 100).await.expect("alerts");
     let all: Vec<i64> = stored.iter().map(|stored| stored.seq).collect();
     assert_eq!(all.len(), 4);
     assert_eq!(all[2], boundary);
-    (scheduler, plugin, all)
+    (scheduler, served, all)
 }
 
 fn seqs(events: &[Event]) -> Vec<i64> {
@@ -181,10 +181,10 @@ fn assert_increasing(seqs: &[i64]) {
 }
 
 #[tokio::test]
-async fn describe_names_the_plugin_and_its_kinds() {
+async fn describe_names_the_monitor_and_its_kinds() {
     let scheduler = unprepared(UNREACHABLE_DATABASE, FakeGazette::new(vec![]));
 
-    let described = plugin(&scheduler)
+    let described = served(&scheduler)
         .describe(Request::new(DescribeRequest {}))
         .await
         .expect("describe")
@@ -232,9 +232,9 @@ async fn events_maps_alerts_and_acknowledges() {
         })
         .await
         .expect("record");
-    let plugin = plugin(&scheduler);
+    let served = served(&scheduler);
 
-    let first = page(&plugin, 0, 0).await;
+    let first = page(&served, 0, 0).await;
 
     let [welcome, edition] = &first[..] else {
         panic!("expected two events: {first:?}");
@@ -263,10 +263,10 @@ async fn events_maps_alerts_and_acknowledges() {
     assert!(welcome.seq < edition.seq);
     assert_eq!(acked(&db.url).await, 0);
 
-    assert_eq!(page(&plugin, welcome.seq, 0).await, first[1..]);
+    assert_eq!(page(&served, welcome.seq, 0).await, first[1..]);
     assert_eq!(acked(&db.url).await, welcome.seq);
 
-    assert_eq!(page(&plugin, 0, 0).await, first);
+    assert_eq!(page(&served, 0, 0).await, first);
     assert_eq!(acked(&db.url).await, welcome.seq);
 }
 
@@ -277,17 +277,17 @@ async fn events_applies_the_limit() {
     };
     let scheduler = prepared(&db.url, FakeGazette::new(vec![])).await;
     add_alerts(&db.url, 149).await;
-    let plugin = plugin(&scheduler);
+    let served = served(&scheduler);
 
-    let default = page(&plugin, 0, 0).await;
+    let default = page(&served, 0, 0).await;
     assert_eq!(default.len(), 100);
     assert_increasing(&seqs(&default));
     assert_eq!(default[0].id, "welcome");
 
-    let seven = page(&plugin, 0, 7).await;
+    let seven = page(&served, 0, 7).await;
     assert_eq!(seqs(&seven), seqs(&default)[..7]);
 
-    assert_eq!(page(&plugin, 0, -3).await.len(), 100);
+    assert_eq!(page(&served, 0, -3).await.len(), 100);
 }
 
 #[tokio::test]
@@ -297,15 +297,15 @@ async fn events_never_returns_more_than_500() {
     };
     let scheduler = prepared(&db.url, FakeGazette::new(vec![])).await;
     add_alerts(&db.url, 600).await;
-    let plugin = plugin(&scheduler);
+    let served = served(&scheduler);
 
-    let full = page(&plugin, 0, 1000).await;
+    let full = page(&served, 0, 1000).await;
     assert_eq!(full.len(), 500);
     assert_increasing(&seqs(&full));
-    assert_eq!(page(&plugin, 0, i32::MAX).await, full);
-    assert_eq!(page(&plugin, 0, 500).await, full);
+    assert_eq!(page(&served, 0, i32::MAX).await, full);
+    assert_eq!(page(&served, 0, 500).await, full);
 
-    let rest = page(&plugin, full[499].seq, 500).await;
+    let rest = page(&served, full[499].seq, 500).await;
     assert_eq!(rest.len(), 101);
     assert!(rest[0].seq > full[499].seq);
 }
@@ -319,15 +319,15 @@ async fn events_after_the_newest_seq_answers_empty_and_keeps_the_alerts() {
     add_alerts(&db.url, 2).await;
     let store = scheduler.monitor().store();
     let newest = store.last_issued_seq().await.expect("newest seq");
-    let plugin = plugin(&scheduler);
+    let served = served(&scheduler);
 
-    assert_eq!(page(&plugin, newest + 50, 0).await, []);
+    assert_eq!(page(&served, newest + 50, 0).await, []);
     assert_eq!(acked(&db.url).await, 0);
 
     store.prune(1000, 0).await.expect("prune");
     let kept = store.alerts_after(0, 100).await.expect("alerts");
     assert_eq!(kept.len(), 3);
-    assert_eq!(page(&plugin, newest, 0).await, []);
+    assert_eq!(page(&served, newest, 0).await, []);
     assert_eq!(acked(&db.url).await, newest);
 }
 
@@ -343,19 +343,19 @@ async fn status_fails_while_the_hub_is_ahead_of_the_database() {
         .last_issued_seq()
         .await
         .expect("newest seq");
-    let plugin = plugin(&scheduler);
-    assert_eq!(status(&plugin).await.state, i32::from(State::Idle));
+    let served = served(&scheduler);
+    assert_eq!(status(&served).await.state, i32::from(State::Idle));
 
-    assert_eq!(page(&plugin, newest + 5, 0).await, []);
-    let ahead = status(&plugin).await;
+    assert_eq!(page(&served, newest + 5, 0).await, []);
+    let ahead = status(&served).await;
     assert_eq!(ahead.state, i32::from(State::Failing));
     assert_eq!(
         ahead.message,
-        "the hub is ahead of this database: reset the hub's position for this plugin"
+        "the hub is ahead of this database: reset the hub's position for this monitor"
     );
 
-    assert_eq!(page(&plugin, newest, 0).await, []);
-    let in_line = status(&plugin).await;
+    assert_eq!(page(&served, newest, 0).await, []);
+    let in_line = status(&served).await;
     assert_eq!(in_line.state, i32::from(State::Idle));
     assert_eq!(in_line.message, "");
 }
@@ -372,25 +372,25 @@ async fn the_hub_falling_ahead_and_back_in_line_signals_the_status() {
         .last_issued_seq()
         .await
         .expect("newest seq");
-    let plugin = plugin(&scheduler);
+    let served = served(&scheduler);
     let mut signals = scheduler.monitor().notifier().subscribe();
     signals.latest_seq();
 
-    assert_eq!(page(&plugin, newest + 5, 0).await, []);
+    assert_eq!(page(&served, newest + 5, 0).await, []);
     assert_eq!(pending_signal(&mut signals).await, Some(0));
-    let ahead = status(&plugin).await;
+    let ahead = status(&served).await;
     assert_eq!(ahead.state, i32::from(State::Failing));
     assert_eq!(
         ahead.message,
-        "the hub is ahead of this database: reset the hub's position for this plugin"
+        "the hub is ahead of this database: reset the hub's position for this monitor"
     );
 
-    assert_eq!(page(&plugin, newest + 5, 0).await, []);
+    assert_eq!(page(&served, newest + 5, 0).await, []);
     assert_eq!(pending_signal(&mut signals).await, None);
 
-    assert_eq!(page(&plugin, newest, 0).await, []);
+    assert_eq!(page(&served, newest, 0).await, []);
     assert_eq!(pending_signal(&mut signals).await, Some(0));
-    let in_line = status(&plugin).await;
+    let in_line = status(&served).await;
     assert_eq!(in_line.state, i32::from(State::Idle));
     assert_eq!(in_line.message, "");
 }
@@ -400,10 +400,10 @@ async fn the_first_read_holds_only_the_alerts_from_before_the_start() {
     let Some(db) = migrated_database().await else {
         return;
     };
-    let (plugin, all) = started_after_three_alerts(&db.url).await;
+    let (served, all) = started_after_three_alerts(&db.url).await;
 
-    assert_eq!(seqs(&page(&plugin, 0, 500).await), all[..3]);
-    assert_eq!(seqs(&page(&plugin, all[2], 500).await), all[3..]);
+    assert_eq!(seqs(&page(&served, 0, 500).await), all[..3]);
+    assert_eq!(seqs(&page(&served, all[2], 500).await), all[3..]);
 }
 
 #[tokio::test]
@@ -411,11 +411,11 @@ async fn the_first_read_ends_with_its_first_short_page() {
     let Some(db) = migrated_database().await else {
         return;
     };
-    let (plugin, all) = started_after_three_alerts(&db.url).await;
+    let (served, all) = started_after_three_alerts(&db.url).await;
 
-    assert_eq!(seqs(&page(&plugin, 0, 2).await), all[..2]);
-    assert_eq!(seqs(&page(&plugin, all[1], 2).await), all[2..3]);
-    assert_eq!(seqs(&page(&plugin, all[2], 2).await), all[3..]);
+    assert_eq!(seqs(&page(&served, 0, 2).await), all[..2]);
+    assert_eq!(seqs(&page(&served, all[1], 2).await), all[2..3]);
+    assert_eq!(seqs(&page(&served, all[2], 2).await), all[3..]);
 }
 
 #[tokio::test]
@@ -423,7 +423,7 @@ async fn the_end_of_the_first_read_signals_the_alerts_it_held() {
     let Some(db) = migrated_database().await else {
         return;
     };
-    let (scheduler, plugin, all) = scheduled_after_three_alerts(&db.url).await;
+    let (scheduler, served, all) = scheduled_after_three_alerts(&db.url).await;
     insert_again(&db.url, "edition-late").await;
     let issued = scheduler
         .monitor()
@@ -435,11 +435,11 @@ async fn the_end_of_the_first_read_signals_the_alerts_it_held() {
     let mut signals = scheduler.monitor().notifier().subscribe();
     signals.latest_seq();
 
-    assert_eq!(seqs(&page(&plugin, 0, 2).await), all[..2]);
+    assert_eq!(seqs(&page(&served, 0, 2).await), all[..2]);
     assert_eq!(pending_signal(&mut signals).await, None);
-    assert_eq!(seqs(&page(&plugin, all[1], 2).await), all[2..3]);
+    assert_eq!(seqs(&page(&served, all[1], 2).await), all[2..3]);
     assert_eq!(pending_signal(&mut signals).await, Some(all[3]));
-    let late = page(&plugin, all[2], 2).await;
+    let late = page(&served, all[2], 2).await;
     let ids: Vec<&str> = late.iter().map(|event| event.id.as_str()).collect();
     assert_eq!(ids, ["edition-late"]);
     assert_eq!(pending_signal(&mut signals).await, None);
@@ -467,15 +467,15 @@ async fn on_a_new_database_the_first_read_is_empty() {
         },
     );
     let scheduler = unprepared(&db.url, fake);
-    let plugin = plugin(&scheduler).with_first_read_boundary(0);
+    let served = served(&scheduler).with_first_read_boundary(0);
     scheduler.monitor().prepare().await.expect("prepare");
     assert_eq!(
         scheduler.monitor().run_cycle().await,
         CycleOutcome::Complete
     );
 
-    assert_eq!(page(&plugin, 0, 500).await, []);
-    let second = page(&plugin, 0, 500).await;
+    assert_eq!(page(&served, 0, 500).await, []);
+    let second = page(&served, 0, 500).await;
     let ids: Vec<&str> = second.iter().map(|event| event.id.as_str()).collect();
     assert_eq!(ids, ["welcome", "edition-77"]);
 }
@@ -483,20 +483,20 @@ async fn on_a_new_database_the_first_read_is_empty() {
 #[tokio::test]
 async fn database_failures_never_show_the_password() {
     let scheduler = unprepared(UNREACHABLE_DATABASE, FakeGazette::new(vec![]));
-    let plugin = plugin(&scheduler);
+    let served = served(&scheduler);
 
-    let failure = events(&plugin, 0, 0)
+    let failure = events(&served, 0, 0)
         .await
         .expect_err("an unreachable database gave events");
     assert_eq!(failure.code(), Code::Unavailable);
     assert_eq!(failure.message(), "the database is unavailable");
 
-    let status = status(&plugin).await;
+    let status = status(&served).await;
     assert_eq!(status.state, i32::from(State::Failing));
     assert_eq!(status.message, "the database is unavailable");
     assert_eq!(status.last_success_at, None);
 
-    let accepted = check(&plugin).await;
+    let accepted = check(&served).await;
     assert!(accepted.accepted);
     for shown in [format!("{failure:?}"), format!("{status:?}")] {
         assert!(!shown.contains("hunter2"), "{shown}");
@@ -507,7 +507,7 @@ async fn database_failures_never_show_the_password() {
 #[tokio::test]
 async fn a_cycle_stopped_by_the_database_shows_the_fixed_phrase() {
     let scheduler = unprepared(UNREACHABLE_DATABASE, FakeGazette::new(vec![]));
-    let plugin = plugin(&scheduler);
+    let served = served(&scheduler);
     let cycles = tokio::spawn(Arc::clone(&scheduler).run());
 
     // A refused connection is retried up to the limit, once for the listing and once for pruning.
@@ -518,7 +518,7 @@ async fn a_cycle_stopped_by_the_database_shows_the_fixed_phrase() {
     })
     .await;
 
-    let status = status(&plugin).await;
+    let status = status(&served).await;
     assert_eq!(status.state, i32::from(State::Failing));
     assert_eq!(
         status.message,
@@ -535,7 +535,7 @@ async fn status_follows_the_cycle() {
     let fake = FakeGazette::new(vec![]);
     fake.gated();
     let scheduler = prepared(&db.url, fake.clone()).await;
-    let plugin = plugin(&scheduler);
+    let served = served(&scheduler);
     let idle = || !scheduler.state().running;
     let cycles = tokio::spawn(Arc::clone(&scheduler).run());
 
@@ -543,7 +543,7 @@ async fn status_follows_the_cycle() {
         scheduler.state().running && fake.listing_afters().len() == 1
     })
     .await;
-    let checking = status(&plugin).await;
+    let checking = status(&served).await;
     assert_eq!(
         checking,
         StatusResponse {
@@ -555,7 +555,7 @@ async fn status_follows_the_cycle() {
         }
     );
     assert_eq!(
-        check(&plugin).await,
+        check(&served).await,
         CheckResponse {
             accepted: false,
             message: "a check is already running".to_owned(),
@@ -565,7 +565,7 @@ async fn status_follows_the_cycle() {
     fake.open_gate();
     eventually(Instant::now() + PATIENCE, "the first cycle ends", idle).await;
     assert_eq!(
-        status(&plugin).await,
+        status(&served).await,
         StatusResponse {
             state: State::Idle.into(),
             message: String::new(),
@@ -577,7 +577,7 @@ async fn status_follows_the_cycle() {
 
     fake.failing_listing();
     assert_eq!(
-        check(&plugin).await,
+        check(&served).await,
         CheckResponse {
             accepted: true,
             message: String::new(),
@@ -588,7 +588,7 @@ async fn status_follows_the_cycle() {
         !state.running && state.problem.is_some()
     })
     .await;
-    let failing = status(&plugin).await;
+    let failing = status(&served).await;
     assert_eq!(failing.state, i32::from(State::Failing));
     assert!(
         failing.message.starts_with("could not list editions"),

@@ -122,17 +122,17 @@ fn keys_sqlx_reads(mut url: Url) -> Result<Url, StoreError> {
         (
             "channel_binding",
             &["disable", "prefer"][..],
-            "DATABASE_URL's channel_binding needs TLS, and the plugin connects without TLS",
+            "DATABASE_URL's channel_binding needs TLS, and the monitor connects without TLS",
         ),
         (
             "sslnegotiation",
             &["postgres"][..],
-            "DATABASE_URL's sslnegotiation needs TLS, and the plugin connects without TLS",
+            "DATABASE_URL's sslnegotiation needs TLS, and the monitor connects without TLS",
         ),
         (
             "target_session_attrs",
             &["any"][..],
-            "DATABASE_URL's target_session_attrs needs a session check the plugin does not run",
+            "DATABASE_URL's target_session_attrs needs a session check the monitor does not run",
         ),
     ];
     let not_honoured = pairs.iter().find_map(|(key, value)| {

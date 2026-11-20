@@ -19,7 +19,7 @@ use crate::monitor::{DATABASE_UNAVAILABLE, Gazette};
 use crate::scheduler::{CycleState, Scheduler};
 use crate::store::{SequencedAlert, StoreError};
 
-const PLUGIN_NAME: &str = "diario";
+const MONITOR_NAME: &str = "diario";
 const TERM_FOUND_KIND: &str = "term_found";
 const WELCOME_KIND: &str = "welcome";
 const DEFAULT_LIMIT: i64 = 100;
@@ -27,9 +27,9 @@ const MAX_LIMIT: i64 = 500;
 const STATUS_QUERY_LIMIT: Duration = Duration::from_secs(10);
 const ALREADY_RUNNING: &str = "a check is already running";
 const HUB_AHEAD: &str =
-    "the hub is ahead of this database: reset the hub's position for this plugin";
+    "the hub is ahead of this database: reset the hub's position for this monitor";
 
-pub struct DiarioPlugin<G> {
+pub struct DiarioMonitor<G> {
     scheduler: Arc<Scheduler<G>>,
     first_read_boundary: Option<i64>,
     first_read_over: AtomicBool,
@@ -38,9 +38,9 @@ pub struct DiarioPlugin<G> {
     status_query_limit: Duration,
 }
 
-impl<G: Gazette> DiarioPlugin<G> {
-    pub fn new(scheduler: Arc<Scheduler<G>>) -> DiarioPlugin<G> {
-        DiarioPlugin {
+impl<G: Gazette> DiarioMonitor<G> {
+    pub fn new(scheduler: Arc<Scheduler<G>>) -> DiarioMonitor<G> {
+        DiarioMonitor {
             scheduler,
             first_read_boundary: None,
             first_read_over: AtomicBool::new(false),
@@ -50,7 +50,7 @@ impl<G: Gazette> DiarioPlugin<G> {
         }
     }
 
-    pub fn with_first_read_boundary(mut self, boundary: i64) -> DiarioPlugin<G> {
+    pub fn with_first_read_boundary(mut self, boundary: i64) -> DiarioMonitor<G> {
         self.first_read_boundary = Some(boundary);
         self
     }
@@ -140,13 +140,13 @@ impl<G: Gazette> DiarioPlugin<G> {
 }
 
 #[tonic::async_trait]
-impl<G: Gazette> Monitor for DiarioPlugin<G> {
+impl<G: Gazette> Monitor for DiarioMonitor<G> {
     async fn describe(
         &self,
         _: Request<DescribeRequest>,
     ) -> Result<Response<DescribeResponse>, Status> {
         Ok(Response::new(DescribeResponse {
-            name: PLUGIN_NAME.to_owned(),
+            name: MONITOR_NAME.to_owned(),
             display_name: GAZETTE_NAME.to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             kinds: vec![
@@ -300,7 +300,7 @@ mod tests {
     use tokio::runtime::{Builder, Runtime};
     use tonic::Request;
 
-    use super::{DiarioPlugin, HUB_AHEAD, STATUS_QUERY_LIMIT};
+    use super::{DiarioMonitor, HUB_AHEAD, STATUS_QUERY_LIMIT};
     use crate::gazette::{Client, HTTP_TIMEOUT};
     use crate::logtest::{captured, logged};
     use crate::monitor::{Monitor, MonitorOptions};
@@ -314,7 +314,7 @@ mod tests {
             .expect("runtime")
     }
 
-    fn plugin(url: &str) -> DiarioPlugin<Client> {
+    fn served(url: &str) -> DiarioMonitor<Client> {
         let now = DateTime::parse_from_rfc3339("2026-11-09T12:00:00Z")
             .expect("timestamp")
             .to_utc();
@@ -327,7 +327,7 @@ mod tests {
         let gazette =
             Client::new("http://127.0.0.1:9/media".to_owned(), HTTP_TIMEOUT).expect("client");
         let monitor = Monitor::new(Store::new(url).expect("store"), gazette, options);
-        DiarioPlugin::new(Scheduler::new(Arc::new(monitor)))
+        DiarioMonitor::new(Scheduler::new(Arc::new(monitor)))
     }
 
     async fn migrate(url: &str) {
@@ -342,10 +342,10 @@ mod tests {
             return;
         };
         runtime.block_on(migrate(&db.url));
-        let plugin = plugin(&db.url);
-        let store = plugin.scheduler.monitor().store();
+        let served = served(&db.url);
+        let store = served.scheduler.monitor().store();
         runtime
-            .block_on(plugin.scheduler.monitor().prepare())
+            .block_on(served.scheduler.monitor().prepare())
             .expect("prepare");
         let newest = runtime.block_on(store.last_issued_seq()).expect("newest");
         let ahead = newest + 5;
@@ -356,7 +356,7 @@ mod tests {
                     after: ahead,
                     limit: 0,
                 });
-                let page = runtime.block_on(plugin.events(request)).expect("events");
+                let page = runtime.block_on(served.events(request)).expect("events");
                 assert!(page.into_inner().events.is_empty());
             }
         });
@@ -382,16 +382,16 @@ mod tests {
                 held.push(socket);
             }
         });
-        let mut plugin = plugin(&format!("postgres://diario:hunter2@{address}/diario"));
-        assert_eq!(plugin.status_query_limit, STATUS_QUERY_LIMIT);
+        let mut served = served(&format!("postgres://diario:hunter2@{address}/diario"));
+        assert_eq!(served.status_query_limit, STATUS_QUERY_LIMIT);
         assert_eq!(STATUS_QUERY_LIMIT, Duration::from_secs(10));
         let limit = Duration::from_millis(300);
-        plugin.status_query_limit = limit;
+        served.status_query_limit = limit;
 
         let started = Instant::now();
         let answered = tokio::time::timeout(
             Duration::from_secs(3),
-            plugin.status(Request::new(StatusRequest {})),
+            served.status(Request::new(StatusRequest {})),
         )
         .await;
         let elapsed = started.elapsed();

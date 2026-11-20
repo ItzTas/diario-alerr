@@ -21,7 +21,7 @@ use tonic::{Request, Streaming};
 use tonic_prost::ProstCodec;
 
 use support::gazette_site::{GazetteSite, SiteEdition};
-use support::process::spawn_plugin;
+use support::process::spawn_monitor;
 use support::schema::{goose_era_database, seed_rows, table_names};
 use support::{
     SIGNAL_WAIT, admin, database, fixed_clock, migrated_database, require_pdftotext, utc,
@@ -186,7 +186,7 @@ async fn grpc(socket: &Path) -> Grpc<Channel> {
         .expect("a socket endpoint")
         .connect()
         .await
-        .expect("connect to the plugin");
+        .expect("connect to the monitor");
     let mut grpc = Grpc::new(channel);
     grpc.ready().await.expect("the channel is ready");
     grpc
@@ -257,7 +257,7 @@ async fn signal_after_a_cycle(
             return seq;
         }
     }
-    panic!("the plugin refused {CHECK_ATTEMPTS} checks in a row");
+    panic!("the monitor refused {CHECK_ATTEMPTS} checks in a row");
 }
 
 async fn signal_above(
@@ -326,7 +326,7 @@ async fn the_hubs_first_read_leaves_the_first_cycle_for_the_next_one() {
     )])
     .await;
     let sockets = tempfile::tempdir().expect("socket directory");
-    let plugin = spawn_plugin(&[
+    let spawned = spawn_monitor(&[
         ("DATABASE_URL", &db.url),
         ("WATCH_TERMS", "PAULO SANTOS"),
         ("GAZETTE_API_URL", &site.api_url()),
@@ -334,9 +334,9 @@ async fn the_hubs_first_read_leaves_the_first_cycle_for_the_next_one() {
     ]);
 
     wait_for_alert(&db.url, "edition-702").await;
-    let first = events(&plugin.socket, 0, 500).await;
+    let first = events(&spawned.socket, 0, 500).await;
     let last = first.last().expect("history").seq;
-    let second = events(&plugin.socket, last, 500).await;
+    let second = events(&spawned.socket, last, 500).await;
 
     assert_eq!(ids(&first), ["welcome", "edition-701"]);
     assert_eq!(ids(&second), ["edition-702"]);
@@ -358,14 +358,14 @@ async fn watch_signals_at_once_and_after_each_recorded_alert() {
     assert_eq!(issued, seeded + 1);
     let site = GazetteSite::start(vec![]).await;
     let sockets = tempfile::tempdir().expect("socket directory");
-    let plugin = spawn_plugin(&[
+    let spawned = spawn_monitor(&[
         ("DATABASE_URL", &db.url),
         ("WATCH_TERMS", "PAULO SANTOS"),
         ("GAZETTE_API_URL", &site.api_url()),
         ("TMPDIR", sockets.path().to_str().expect("a UTF-8 path")),
     ]);
 
-    let mut stream = watch(&plugin.socket).await;
+    let mut stream = watch(&spawned.socket).await;
     let first = next_watch_signal(&mut stream, Instant::now() + SIGNAL_WAIT).await;
     assert_eq!(first, seeded);
 
@@ -375,7 +375,7 @@ async fn watch_signals_at_once_and_after_each_recorded_alert() {
         "ED 702",
         &["Nomeacao de PAULO SANTOS"],
     ));
-    let announced = signal_after_a_cycle(&plugin.socket, &mut stream, seeded).await;
+    let announced = signal_after_a_cycle(&spawned.socket, &mut stream, seeded).await;
 
     let recorded: Vec<(String, i64)> = store
         .alerts_after(seeded, 10)
@@ -408,14 +408,14 @@ async fn a_database_left_by_2_1_keeps_its_alerts_and_positions() {
     assert_eq!(seeded.len(), 3, "{seeded:?}");
     let site = GazetteSite::start(vec![]).await;
     let sockets = tempfile::tempdir().expect("socket directory");
-    let plugin = spawn_plugin(&[
+    let spawned = spawn_monitor(&[
         ("DATABASE_URL", &db.url),
         ("WATCH_TERMS", "PAULO SANTOS"),
         ("GAZETTE_API_URL", &site.api_url()),
         ("TMPDIR", sockets.path().to_str().expect("a UTF-8 path")),
     ]);
 
-    let read: Vec<(i64, String)> = events(&plugin.socket, 0, 0)
+    let read: Vec<(i64, String)> = events(&spawned.socket, 0, 0)
         .await
         .into_iter()
         .map(|event| (event.seq, event.id))

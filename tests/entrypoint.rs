@@ -13,7 +13,7 @@ use tokio_postgres::{Client, NoTls};
 
 use support::gazette_site::GazetteSite;
 use support::process::{
-    COOKIE, Exited, error_lines, require_sh, run_plugin, spawn_plugin, terminate,
+    COOKIE, Exited, error_lines, require_sh, run_monitor, spawn_monitor, terminate,
 };
 use support::{eventually, migrated_database, require_pdftotext, utc};
 
@@ -64,15 +64,15 @@ async fn applied_migrations(client: &Client) -> Vec<(String, i64)> {
 
 #[test]
 fn without_the_cookie_explains_and_exits_1() {
-    let exited = run_plugin(&["monitor"], &[], EXIT_LIMIT);
+    let exited = run_monitor(&["monitor"], &[], EXIT_LIMIT);
 
     assert_refused_before_the_handshake(&exited);
     assert_eq!(exited.stderr, format!("{NOT_LAUNCHED_BY_HUB}\n"));
 }
 
 #[test]
-fn without_the_plugin_argument_explains_and_exits_1() {
-    let exited = run_plugin(&[], &[COOKIE], EXIT_LIMIT);
+fn without_the_monitor_argument_explains_and_exits_1() {
+    let exited = run_monitor(&[], &[COOKIE], EXIT_LIMIT);
 
     assert_refused_before_the_handshake(&exited);
     assert_eq!(exited.stderr, format!("{NOT_LAUNCHED_BY_HUB}\n"));
@@ -80,7 +80,7 @@ fn without_the_plugin_argument_explains_and_exits_1() {
 
 #[test]
 fn config_error_exits_before_the_handshake() {
-    let exited = run_plugin(
+    let exited = run_monitor(
         &["monitor"],
         &[COOKIE, ("WATCH_TERMS", "PAULO SANTOS")],
         EXIT_LIMIT,
@@ -98,7 +98,7 @@ fn config_error_exits_before_the_handshake() {
 #[test]
 fn a_term_too_long_to_match_exits_before_the_handshake() {
     let terms = format!("PAULO SANTOS, {}", vec!["PAULO"; 32].join(" "));
-    let exited = run_plugin(
+    let exited = run_monitor(
         &["monitor"],
         &[
             COOKIE,
@@ -122,7 +122,7 @@ fn a_term_too_long_to_match_exits_before_the_handshake() {
 fn a_missing_pdftotext_stops_the_start_up() {
     let empty = tempfile::tempdir().expect("an empty PATH directory");
 
-    let exited = run_plugin(
+    let exited = run_monitor(
         &["monitor"],
         &[
             COOKIE,
@@ -157,7 +157,7 @@ fn a_url_without_a_password_stops_the_start_before_pgpass_is_read() {
     fs::set_permissions(&pgpass, fs::Permissions::from_mode(0o600))
         .expect("restrict the pgpass file");
 
-    let exited = run_plugin(
+    let exited = run_monitor(
         &["monitor"],
         &[
             COOKIE,
@@ -195,7 +195,7 @@ async fn second_process_refuses_to_start() {
     let before = applied_migrations(&admin).await;
     let sockets = socket_dir();
 
-    let exited = run_plugin(
+    let exited = run_monitor(
         &["monitor"],
         &[
             COOKIE,
@@ -244,14 +244,14 @@ async fn sigterm_during_a_cycle_exits_within_two_seconds() {
     site.stall();
     let sockets = socket_dir();
 
-    let mut plugin = spawn_plugin(&[
+    let mut spawned = spawn_monitor(&[
         ("DATABASE_URL", &db.url),
         ("WATCH_TERMS", "PAULO SANTOS"),
         ("GAZETTE_API_URL", &site.api_url()),
         ("TZ", "America/Boa_Vista"),
         ("TMPDIR", path_text(&sockets)),
     ]);
-    assert!(plugin.socket.exists(), "{}", plugin.socket.display());
+    assert!(spawned.socket.exists(), "{}", spawned.socket.display());
     eventually(
         tokio::time::Instant::now() + Duration::from_secs(10),
         "the cycle asks the site for editions",
@@ -262,8 +262,8 @@ async fn sigterm_during_a_cycle_exits_within_two_seconds() {
     assert!(query.contains("after=2026-11-01T10%3A00%3A00"), "{query}");
 
     let signalled = Instant::now();
-    terminate(&mut plugin.child);
-    let exited = plugin.exit_within(STOP_LIMIT);
+    terminate(&mut spawned.child);
+    let exited = spawned.exit_within(STOP_LIMIT);
 
     assert!(
         signalled.elapsed() < STOP_LIMIT,
@@ -271,7 +271,7 @@ async fn sigterm_during_a_cycle_exits_within_two_seconds() {
         signalled.elapsed()
     );
     assert_eq!(exited.status.code(), Some(0), "{}", exited.stderr);
-    assert!(!plugin.socket.exists(), "{}", plugin.socket.display());
+    assert!(!spawned.socket.exists(), "{}", spawned.socket.display());
     assert_eq!(exited.stdout.lines().count(), 1, "{}", exited.stdout);
     assert!(error_lines(&exited.stderr).is_empty(), "{}", exited.stderr);
 }
@@ -295,7 +295,7 @@ async fn start_up_removes_its_own_leftover_pdfs() {
     }
     std::os::unix::fs::symlink(&target, &link).expect("link");
 
-    let _plugin = spawn_plugin(&[
+    let _spawned = spawn_monitor(&[
         ("DATABASE_URL", &db.url),
         ("WATCH_TERMS", "PAULO SANTOS"),
         ("GAZETTE_API_URL", UNREACHABLE_GAZETTE),
@@ -318,7 +318,7 @@ async fn losing_the_database_lock_exits_1() {
     };
     let site = GazetteSite::start(vec![]).await;
     let sockets = socket_dir();
-    let mut plugin = spawn_plugin(&[
+    let mut spawned = spawn_monitor(&[
         ("DATABASE_URL", &db.url),
         ("WATCH_TERMS", "PAULO SANTOS"),
         ("GAZETTE_API_URL", &site.api_url()),
@@ -342,7 +342,7 @@ async fn losing_the_database_lock_exits_1() {
         .collect();
     assert_eq!(terminated, [true]);
 
-    let exited = plugin.exit_within(Duration::from_secs(5));
+    let exited = spawned.exit_within(Duration::from_secs(5));
 
     assert_eq!(exited.status.code(), Some(1), "{}", exited.stderr);
     let error = single_error(&exited);
@@ -353,5 +353,5 @@ async fn losing_the_database_lock_exits_1() {
         "{}",
         exited.stderr
     );
-    assert!(!plugin.socket.exists(), "{}", plugin.socket.display());
+    assert!(!spawned.socket.exists(), "{}", spawned.socket.display());
 }
