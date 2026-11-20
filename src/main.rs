@@ -32,7 +32,7 @@ fn main() -> ExitCode {
 
 fn launched_as_plugin() -> bool {
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
-    arguments == ["plugin"] && launched_by_hub()
+    arguments == ["monitor"] && launched_by_hub()
 }
 
 fn runtime() -> Option<Runtime> {

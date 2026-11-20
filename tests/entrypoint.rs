@@ -64,7 +64,7 @@ async fn applied_migrations(client: &Client) -> Vec<(String, i64)> {
 
 #[test]
 fn without_the_cookie_explains_and_exits_1() {
-    let exited = run_plugin(&["plugin"], &[], EXIT_LIMIT);
+    let exited = run_plugin(&["monitor"], &[], EXIT_LIMIT);
 
     assert_refused_before_the_handshake(&exited);
     assert_eq!(exited.stderr, format!("{NOT_LAUNCHED_BY_HUB}\n"));
@@ -81,7 +81,7 @@ fn without_the_plugin_argument_explains_and_exits_1() {
 #[test]
 fn config_error_exits_before_the_handshake() {
     let exited = run_plugin(
-        &["plugin"],
+        &["monitor"],
         &[COOKIE, ("WATCH_TERMS", "PAULO SANTOS")],
         EXIT_LIMIT,
     );
@@ -99,7 +99,7 @@ fn config_error_exits_before_the_handshake() {
 fn a_term_too_long_to_match_exits_before_the_handshake() {
     let terms = format!("PAULO SANTOS, {}", vec!["PAULO"; 32].join(" "));
     let exited = run_plugin(
-        &["plugin"],
+        &["monitor"],
         &[
             COOKIE,
             ("DATABASE_URL", UNREACHABLE_DATABASE),
@@ -123,7 +123,7 @@ fn a_missing_pdftotext_stops_the_start_up() {
     let empty = tempfile::tempdir().expect("an empty PATH directory");
 
     let exited = run_plugin(
-        &["plugin"],
+        &["monitor"],
         &[
             COOKIE,
             ("DATABASE_URL", UNREACHABLE_DATABASE),
@@ -158,7 +158,7 @@ fn a_url_without_a_password_stops_the_start_before_pgpass_is_read() {
         .expect("restrict the pgpass file");
 
     let exited = run_plugin(
-        &["plugin"],
+        &["monitor"],
         &[
             COOKIE,
             (
@@ -196,7 +196,7 @@ async fn second_process_refuses_to_start() {
     let sockets = socket_dir();
 
     let exited = run_plugin(
-        &["plugin"],
+        &["monitor"],
         &[
             COOKIE,
             ("DATABASE_URL", &db.url),

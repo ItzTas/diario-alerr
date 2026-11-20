@@ -420,7 +420,7 @@ mod tests {
             json!({
                 "protocol_version": 2,
                 "name": "diario",
-                "command": ["diario-alerr", "plugin"],
+                "command": ["diario-alerr", "monitor"],
                 "apk": ["poppler-utils"],
             })
         );

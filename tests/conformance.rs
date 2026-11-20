@@ -53,7 +53,7 @@ fn text(path: &Path) -> String {
 
 fn plugin_conformance(url: &str, api_url: &str, sockets: &TempDir, data: &TempDir) -> Conformance {
     let mut conformance = Conformance::new(env!("CARGO_BIN_EXE_diario-alerr"));
-    conformance.command.push("plugin".to_owned());
+    conformance.command.push("monitor".to_owned());
     let path = env::var("PATH").unwrap_or_default();
     conformance.env = [
         ("DATABASE_URL", url.to_owned()),

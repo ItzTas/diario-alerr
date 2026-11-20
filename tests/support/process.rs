@@ -36,7 +36,7 @@ struct Output {
 pub fn spawn_plugin(env: &[(&str, &str)]) -> RunningPlugin {
     let mut with_cookie = vec![COOKIE];
     with_cookie.extend_from_slice(env);
-    let mut plugin = start(&["plugin"], &with_cookie);
+    let mut plugin = start(&["monitor"], &with_cookie);
     let Ok(line) = plugin.output.first_line.recv_timeout(HANDSHAKE_LIMIT) else {
         plugin.fail("the plugin printed no handshake line within 30 seconds");
     };
