@@ -3,6 +3,7 @@ use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use chrono::{DateTime, Utc};
+use monitor_hub_sdk::StatusScope;
 use tokio::sync::Notify;
 use tokio::task::{AbortHandle, JoinError};
 use tracing::error;
@@ -44,11 +45,15 @@ impl<G: Gazette> Scheduler<G> {
 
     pub async fn run(self: Arc<Self>) {
         loop {
-            self.begin();
-            let outcome = self.cycle().await;
-            self.finish(outcome);
+            self.run_once().await;
             self.wait_for_next().await;
         }
+    }
+
+    async fn run_once(&self) {
+        let _cycle = self.begin();
+        let outcome = self.cycle().await;
+        self.finish(outcome);
     }
 
     pub fn trigger(&self) -> bool {
@@ -68,12 +73,12 @@ impl<G: Gazette> Scheduler<G> {
         &self.monitor
     }
 
-    fn begin(&self) {
+    fn begin(&self) -> StatusScope {
         let mut state = self.lock_state();
         state.running = true;
         state.last_started = Some(self.monitor.now());
         let _served_by_this_cycle = pin!(self.wake.notified()).enable();
-        self.monitor.notifier().status_changed();
+        self.monitor.notifier().status_scope()
     }
 
     async fn cycle(&self) -> CycleOutcome {
@@ -91,7 +96,6 @@ impl<G: Gazette> Scheduler<G> {
             CycleOutcome::Complete => None,
             CycleOutcome::Incomplete(problem) => Some(problem),
         };
-        self.monitor.notifier().status_changed();
     }
 
     async fn wait_for_next(&self) {
