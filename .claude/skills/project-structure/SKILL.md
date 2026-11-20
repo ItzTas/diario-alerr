@@ -2,9 +2,9 @@
 name: project-structure
 description: >-
   File structure, module layering and persistence conventions for diario-alerr (a Rust monitor-hub
-  plugin: tonic over the SDK, SeaORM on sqlx with sea-orm-migration, Postgres). Read this before
+  monitor: tonic over the SDK, SeaORM on sqlx with sea-orm-migration, Postgres). Read this before
   creating or moving a module, integration test, test helper, migration or any config/scaffolding
-  file (Cargo.toml, rust-toolchain.toml, plugin.json, Dockerfile, compose.yaml, .github/,
+  file (Cargo.toml, rust-toolchain.toml, monitor.json, Dockerfile, compose.yaml, .github/,
   .githooks/, .env.example), so new code lands where the rest already is.
 ---
 
@@ -20,10 +20,10 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 .
 ├── Cargo.toml                 # package diario-alerr 2.2.0, edition 2024, lib + bin
 ├── Cargo.lock                 # committed; CI and the image build use --locked
-├── rust-toolchain.toml        # the SDK's channel at sdk-rust/v0.3.0, with rustfmt and clippy
-├── plugin.json                # the manifest the hub reads: name diario, command diario-alerr plugin
+├── rust-toolchain.toml        # the SDK's channel at sdk-rust/v0.4.0, with rustfmt and clippy
+├── monitor.json               # the manifest the hub reads: name diario, command diario-alerr monitor
 ├── src/
-│   ├── main.rs                # "plugin" argument + hub cookie, logging, runtime, exit code
+│   ├── main.rs                # "monitor" argument + hub cookie, logging, runtime, exit code
 │   ├── lib.rs                 # module declarations only
 │   ├── app.rs                 # start-up: config, pdftotext check, lock, PDF sweep, migrations, first-read seq, prepare, serve
 │   ├── config.rs              # Config from the environment, defaults and the Go release's messages
@@ -47,7 +47,7 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 │   │   └── m20261118_000002_drop_go_tables.rs # drops alert_deliveries and goose_db_version
 │   ├── monitor.rs             # trait Gazette, Monitor: prepare, run_cycle
 │   ├── scheduler.rs           # periodic loop, trigger, CycleState
-│   ├── server.rs              # DiarioPlugin: the plugin contract over the scheduler and the store
+│   ├── server.rs              # DiarioMonitor: the monitor contract over the scheduler and the store
 │   ├── golden.rs              # tests only: golden!("file") reads testdata/golden
 │   └── logtest.rs             # tests only: captures log events on the calling thread
 ├── sql/
@@ -62,7 +62,7 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 │   │   └── fake_gazette.rs  gazette_site.rs  pdf.rs  process.rs
 │   ├── gazette.rs  store.rs  migration.rs  monitor.rs  scheduler.rs  server.rs
 │   └── end_to_end.rs  entrypoint.rs  conformance.rs
-├── .env.example               # every variable, for compose, the tests and a local plugin run
+├── .env.example               # every variable, for compose, the tests and a local monitor run
 ├── .githooks/                 # commit-msg (Conventional Commits) + pre-commit (cargo fmt, cargo test)
 ├── .github/workflows/         # docker.yml: fmt, clippy and tests against Postgres, then the GHCR image
 ├── .prototools                # proto: pins Go for the conformance test
@@ -79,7 +79,7 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
   handshake goes in `start_up`, inside the 45 s start-up limit, with a step name for its error.
 - `monitor.rs` holds the cycle logic and depends on the `Gazette` trait, not on `gazette::Client`,
   so tests can use a fake gazette. `scheduler.rs` decides when cycles run, and `server.rs` maps
-  the scheduler and the store onto the plugin contract.
+  the scheduler and the store onto the monitor contract.
 - A subject module owns its types and its error enum (`thiserror`). Move a helper only when a
   second module needs it.
 - `pub` is for what another module or `tests/` uses. The rest is `pub(crate)` or private.
@@ -92,7 +92,7 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 These are the rules of the Persistence section in `CLAUDE.md`, which also lists the log lines the
 database layer writes.
 
-- The plugin reaches Postgres through SeaORM on sqlx. The tables are hand-written entities in
+- The monitor reaches Postgres through SeaORM on sqlx. The tables are hand-written entities in
   `src/store/entity/`. The migrations are `sea-orm-migration` modules in `src/migration/`, run in
   the order of `Migrator::migrations`, and `seaql_migrations` records the ones applied.
 - The first migration, `m20261118_000001_goose_schema`, adopts the schema that goose built for 2.1
@@ -134,8 +134,8 @@ database layer writes.
   same keepalives, no statement or lock timeout because the migrations run there, and
   `client_min_messages=warning`. It is never tested before use: a failed test would quietly open a
   new connection without the lock. Every 0.5 s, a query with 10 s to answer checks in `pg_locks`
-  that this connection still holds the lock. The plugin gives up on a silent connection after
-  about 10.5 s, and the server frees a vanished plugin's lock only after about 60 s, so the lock
+  that this connection still holds the lock. The monitor gives up on a silent connection after
+  about 10.5 s, and the server frees a vanished monitor's lock only after about 60 s, so the lock
   cannot pass to a second copy while the first could still write.
 - Times are `TIMESTAMPTZ` and map to `DateTime<Utc>`. Integers are `BIGINT`.
 
@@ -185,5 +185,5 @@ database layer writes.
 - The image builds on the build machine's platform with `cargo zigbuild` for
   `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`. The final stage has only `COPY`
   instructions, so no emulation is needed. `poppler-utils` is not in the image; the hub installs
-  it from the `apk` list in `plugin.json`.
+  it from the `apk` list in `monitor.json`.
 - Never change the versions pinned in `.prototools`.
