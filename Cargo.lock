@@ -778,7 +778,7 @@ dependencies = [
 
 [[package]]
 name = "diario-alerr"
-version = "2.2.0"
+version = "2.3.0"
 dependencies = [
  "anyhow",
  "axum",
