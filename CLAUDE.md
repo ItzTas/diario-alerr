@@ -4,129 +4,366 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 # diario-alerr
 
-Watches the ALE/RR Official Gazette (the PDF editions published on `diarios.al.rr.leg.br`) for a
-list of names or registration numbers, and alerts through Telegram, ntfy and an RSS feed when one of
-them shows up. Written in Go. The root `main.go` only builds and starts the pieces; the code lives
-in the packages under `internal/`.
+A monitor for monitor-hub. It watches the ALE/RR Official Gazette (the PDF editions published on
+`diarios.al.rr.leg.br`) for a list of names or registration numbers, and records an alert when one
+of them shows up. The hub reads those alerts as events and sends the notifications. The monitor is
+written in Rust on the monitor-hub SDK (`monitor-hub-sdk`, git tag `sdk-rust/v0.4.0`).
 
-**Before creating or moving a directory, package, module, migration or query, read
-`.claude/skills/project-structure/SKILL.md`.** It holds the full layout, the module layering and
-the persistence workflow.
+The image does not run on its own. It holds `/monitor/monitor.json` and `/monitor/diario-alerr`, and
+the hub's image build copies that directory in. Release `1.0.0` was a standalone Go service; its
+code is gone from the tree, and the tag `v1.0.0` stays as the reference for the golden vectors.
+
+**Before creating or moving a module, test file, migration or any config/scaffolding file, read
+`.claude/skills/project-structure/SKILL.md`.** It holds the full layout and the persistence
+workflow.
 
 ## Code
 
-- **Do not write comments in the code.** No line, block or doc comments. Names of functions, types
-  and variables explain what the code does. Compiler directives such as `//go:embed` and
-  `//go:build` are not comments and stay allowed.
-- **English everywhere**: identifiers, packages, file and directory names, SQL tables and columns,
-  migration names, logs, error messages, the alert text, the feed and the docs.
-- Only export what another package uses.
+- **Comments are short and only where they explain something worth explaining**: a guarantee, a
+  rule that comes from outside, a pointer to this file. Where the code is obvious, write none.
+  Never a comment that repeats the code. Attributes such as `#[cfg(test)]` are not comments.
+- **English everywhere**: identifiers, file names, SQL, logs, error messages, the alert text and
+  the docs.
+- Only make `pub` what another module or the integration tests in `tests/` use. Everything else is
+  `pub(crate)` or private.
+- `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings` stay clean.
+- Prefer guard clauses and small functions over `else` branches, and a map over a chain of
+  `match`/`if` arms when the code only maps keys to values.
+- All time is UTC (`chrono::Utc`). Nothing reads the local time zone or `TZ`.
+- `DATABASE_URL` carries the password. It never appears in a log, an error, a `Debug` output or a
+  gRPC message, and `Config` does not derive `Debug`.
 
 ## Commands
 
 ```bash
-go build ./...
-go vet ./...
-go test ./...                 # needs initdb/postgres on the machine or TEST_DATABASE_URL
-golangci-lint run ./...
-go tool sqlc generate         # regenerate internal/db from sql/schema + sql/queries
-go tool air                   # hot reload, reads .env (.air.toml)
-make check                    # gofmt + vet + golangci-lint + go test -race
-docker compose up -d          # app only; joins the shared `postgres` network
+cargo build
+cargo test                    # see Tests for what needs Postgres, pdftotext or go
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+make check                    # fmt + clippy + test
+make up                       # docker compose up -d: development Postgres on 127.0.0.1:5432
+make down
+docker buildx build --platform linux/amd64,linux/arm64 .
 git config core.hooksPath .githooks   # once per clone
 ```
 
-- Tests that touch the database go through `internal/core/coretest`. The `TestMain` of each such
-  package (`database_test.go`) calls `coretest.Run`, which starts a throwaway Postgres with the
-  machine's `initdb` and `postgres` in a `/tmp` directory, killed with the test process, and
-  migrates a template database once. Each test gets a fresh copy with `coretest.Database(t)` (an
-  address) or `coretest.Pool(t)` (an open pool). With `TEST_DATABASE_URL` set it uses that server
-  instead. With `CI` set, a missing Postgres fails the run instead of skipping the tests. A new
-  package with database tests needs its own `database_test.go`.
-- The scan tests and the root integration tests need `pdftotext` (poppler); they skip without it
-  locally and fail without it in CI.
-- The root `integration_test.go` builds the whole app with the same `assemble` as `main.go`,
-  against a fake gazette site (`internal/gazette/gazettetest`, which also generates the PDFs) and
-  fake ntfy/Telegram servers. Restarting is calling `assemble` again on the same database.
-- CI (`.github/workflows/docker.yml`) runs gofmt, `go vet` and `go test -race` against a Postgres
-  service, then builds the multi-arch image (amd64/arm64) and publishes it to `ghcr.io` on pushes
-  to `main` and on `v*` tags.
+The pre-commit hook runs `cargo fmt --check` and `cargo test`. The commit-msg hook enforces
+Conventional Commits.
 
-## Configuration (environment variables)
+## Tests
 
-`core.Load` reads `.env` first when it exists (a missing file is fine) and then the environment.
-`.env.example` documents every variable.
+Some tests need tools from outside the crate. When one is missing they print a `skipping:` notice
+on stderr and return. When `CI` is set and not empty they panic instead, so CI never passes by
+skipping.
 
-- `DATABASE_URL` (required): Postgres address. The schema is migrated at boot.
+- Postgres: `tests/support/postgres.rs`'s `database()` gives each test its own database. It uses
+  `TEST_DATABASE_URL` when set (the compose Postgres works, see `.env.example`), and otherwise
+  starts a throwaway cluster with `initdb` and `postgres` from `PATH`, listening on a local TCP
+  port. `TEST_DATABASE_URL` must carry a password, like `DATABASE_URL`. The throwaway cluster
+  trusts every login, so its URL carries one that Postgres ignores.
+  `tests/support::migrated_database` adds the migrations.
+- `pdftotext` (poppler) for the PDF scans, and for every test that starts the binary, because
+  start-up checks for it.
+- `sh` with `kill` for the tests that start the binary and signal it.
+- The conformance command for `tests/conformance.rs`: the binary named by `MONITOR_CONFORMANCE`,
+  or else `go install` of `monitor-conformance` at the SDK's Go tag `sdk-go/v0.6.0`, cached under
+  `~/.cache/monitor-hub/monitor-conformance/`. It fails a monitor whose `Watch` answers
+  `UNIMPLEMENTED`.
+
+The tests of the `Watch` signals wait under a bounded `timeout` and never sleep. Most subscribe
+with `Notifier::subscribe` and wait on `changed()`; the end-to-end test reads the `Watch` stream.
+
+The SDK refuses Unix socket paths longer than 100 bytes, so a long `TMPDIR` breaks the tests that
+start the monitor. The same holds for the monitor itself under the hub, where `TMPDIR` is `/tmp`.
+
+Golden vectors: `testdata/golden/` holds files generated by the Go release `v1.0.0` (normalization,
+term matching, alert text, configuration, WordPress dates, HTML entities, the listing query and a
+fake PDF). The Rust tests read them through `src/golden.rs` and must match them. The generator
+left with the Go code, so the files are frozen. A difference is a bug in the Rust code, never a
+reason to edit a vector.
+
+CI (`.github/workflows/docker.yml`) runs `cargo fmt --check`, clippy and `cargo test --locked`
+against a `postgres:18-alpine` service, with Go 1.27.2 and poppler installed. Then it builds the
+image for amd64 and arm64 and publishes it to `ghcr.io` on every run that is not a pull request:
+pushes to `main`, `v*` tags and manual runs. A `v*` tag gets the version tags (`2.3.0` and `2.3`),
+only the default branch moves `latest`, and every image gets a `sha-` tag.
+
+## Configuration
+
+Under monitor-hub, set these on the hub with the `DIARIO__` prefix (`DIARIO__WATCH_TERMS` and so
+on). The hub removes the prefix before it starts the monitor. The monitor reads only its
+environment, never a `.env` file. `.env.example` lists every variable except `GAZETTE_API_URL`,
+which only the tests set.
+
+- `DATABASE_URL` (required): the Postgres address, as
+  `postgres://user:password@host:port/database?sslmode=disable` (`postgresql://` works too). Put
+  the host, port, user, password and database in the URL.
+  - The password goes in the address or in a `password` query key. A URL without one, or with an
+    empty one, is refused with `DATABASE_URL has no password: add the role's password to the
+    URL`. Without a password in the URL, sqlx would read `PGPASSWORD`, `PGPASSFILE` or
+    `~/.pgpass`, and it logs a malformed `.pgpass` line whole at `warn`. A line missing a field,
+    such as `*:*:*:secret`, puts the password where sqlx expects the user name, so the log would
+    show it. With the refusal in place, the monitor never uses `PGPASSWORD` and never reads a
+    `.pgpass` file. A database that trusts the role still needs a password in the URL, and
+    Postgres ignores it.
+  - Whatever else the URL leaves out, sqlx takes from the `PG*` variables (`PGPORT`, `PGUSER`,
+    `PGDATABASE`, `PGOPTIONS`, `PGSSLMODE` and the rest), then the user from the system account.
+    Under the hub the `PG*` variables only arrive when set as `DIARIO__PG*`.
+  - The monitor connects without TLS. `sslmode=disable`, `allow` and `prefer` connect in plain
+    text; `require`, `verify-ca` and `verify-full` fail at once.
+  - These are refused with `DATABASE_URL is not a valid Postgres address`, which never repeats the
+    address: the key=value form (`host=db user=diario`), several hosts (`h1,h2`), a URL with no
+    host (unless a `host` or `hostaddr` query key names one), any scheme other than the two above,
+    and any query key the monitor does not know. sqlx would log an unknown key together with its
+    value, and that value can be a secret (`sslpassword`, a misspelled `Password`).
+  - The monitor passes on the query keys sqlx reads: `sslmode`, `options`, `application_name`,
+    `host`, `hostaddr`, `port`, `dbname`, `user`, `password`, the certificate keys (`sslrootcert`,
+    `sslcert`, `sslkey` and their dashed forms) and `statement-cache-capacity`. Key names are case
+    sensitive.
+  - It accepts and ignores the libpq keys that 2.1 took and sqlx has no equivalent for:
+    `connect_timeout`, `tcp_user_timeout`, `keepalives`, `keepalives_idle`, `keepalives_interval`,
+    `keepalives_retries` and `load_balance_hosts`, plus `channel_binding=disable` or `prefer`,
+    `sslnegotiation=postgres` and `target_session_attrs=any`. Any other value of those last three
+    stops the start with a message that names the key and never its value: `channel_binding` and
+    `sslnegotiation` need TLS, and `target_session_attrs` needs a session check the monitor does not
+    run.
+  - An IPv6 host goes in brackets: `postgres://user:password@[::1]:5432/database`.
 - `WATCH_TERMS` (required): comma-separated names or registration numbers. Matching ignores case,
   accents and repeated whitespace. The words of a name match in order with up to four words of
   letters between them, so `Paulo Santos` also matches `PAULO HENRIQUE DE OLIVEIRA SANTOS`, but a
   number or a comma in between stops it. A term with a digit is a registration number: leading
   zeros and one `.`, `-`, `/` or space between characters are ignored, so `0034712k` also matches
   `34.712-K` and `34712/K`, but not `134712-K`.
-- `CHECK_INTERVAL_MINUTES` (default 30).
-- `START_AFTER`: date (`2006-01-02`) or RFC 3339 timestamp of the first edition to consider. Only
-  used the first time, when the database has no state yet. Default: three days ago.
-- `STATE_FILE`: the `state.json` of earlier, file-based versions. When it exists and the database
-  has no state yet, its cursor, seen editions, alerts and deliveries are imported instead of
-  sending the welcome alert.
-- `PUBLIC_URL`: link of the RSS channel (compose builds it from `PUBLIC_HOST`). `HTTP_PORT`
-  (default 8080).
-- `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` turn on Telegram; `NTFY_URL` (+ `NTFY_TOPIC`, default
-  `diario-alerr`, and optional `NTFY_TOKEN`) turns on ntfy.
-- `GAZETTE_API_URL` and `TELEGRAM_API_URL` override the upstream addresses; only the tests use them.
+- `CHECK_INTERVAL_MINUTES` (default 30): a positive decimal number of minutes.
+- `START_AFTER`: when the first edition to consider was published. A date (`2006-01-02`), an
+  RFC 3339 timestamp, or a timestamp without a zone (`2006-01-02T15:04:05`, read as UTC). Only
+  used the first time, when the database has no state yet. Default: 72 hours before the start.
+- `GAZETTE_API_URL` overrides the gazette's media API address. Only the tests use it.
 
-## Architecture
+The hub also passes `PATH`, `TZ`, `TMPDIR` and `MONITOR_HUB_DATA_DIR`. The monitor ignores `TZ`
+and keeps all its state in Postgres. Each PDF is downloaded to a temporary file in `TMPDIR`.
 
-### Packages
+## Differences from the Go matcher
 
-- `internal/core`: what every package uses, one file per subject: `config.go` (`Config`, `Load`),
-  `database.go` (`OpenDatabase`: migrate, open the pgx pool, ping), `http.go` (`Get`/`PostJSON`
-  with the user agent; errors never carry the URL, so the Telegram token never reaches a log) and
-  `alert.go` (`Alert` and the gazette constants).
-- `internal/gazette`: the WordPress media API client (`ListEditions`, paginated by
-  `X-WP-TotalPages`), PDF download and text extraction through `pdftotext` (`pdf.go`) and the term
-  matching (`match.go`: `Normalize`, `FindTerms`, the snippet around the first hit).
-- `internal/notify`: one `Sender` per channel (`telegram.go`, `ntfy.go`); `Channels` returns the
-  enabled ones by name.
-- `internal/watch`: the monitor. `service.go` runs one cycle, `cycle.go` is the periodic job,
-  `repository.go` the Postgres access over sqlc, `alerts.go` the alert text, `statefile.go` the
-  import of the old `state.json`.
-- `internal/modules/feed` (`GET /feed.xml`) and `internal/modules/health` (`GET /healthz`): HTTP
-  modules in layers `types` / `repository` / `service` / `handler` / `routes`.
-- `internal/db`: generated by sqlc. **Never edit it by hand.**
-- `sql/schema`: goose migrations, embedded and applied at boot by `schema.Migrate`.
-  `sql/queries`: the sqlc queries.
+The Go matcher (`internal/gazette/match.go`, last changed in `764b330`) is the specification for
+`src/text.rs`. The monitor differs from it only in these cases:
 
-Who imports whom: everyone may use `core` and `db`; `watch` uses `gazette` and `notify`; the
-modules use only `core` and `db`. `main.go` is the only place that knows every package.
+- A `WATCH_TERMS` term whose pattern does not fit the `regex` crate's default size limit (10 MiB)
+  is a configuration error, and the monitor does not start. A name reaches the limit at 32 words
+  and a registration number at about 6,750 characters. Go accepts such a term. The error gives the
+  term's position, counting from 1, and its size:
+  `WATCH_TERMS term 2 (32 words) is too long to match: shorten it`. The configuration compiles
+  every pattern once to check it, and the scan compiles them again for each edition, as Go does.
+- The patterns' `\p{L}` and `\p{N}` come from `regex-syntax` 0.8.11, the newest release, which
+  carries the Unicode 16 tables. Go 1.27.2 carries Unicode 17. Letters and digits added in
+  Unicode 17 are not letters or digits to the monitor's patterns. Between the words of a name they
+  stop the match, where Go reads a middle name. Next to a registration number they count as an
+  edge, so the monitor matches where Go sees the number touching a letter or digit. None of them
+  occurs in Portuguese text. Revisit this when `regex-syntax` updates its tables. Deciding whether
+  a term is a registration number, and which of its characters count, uses `unicode-properties`,
+  which carries Unicode 17 like Go.
 
-### Flow of a cycle
+## Process contract
 
-`main.go` loads the config, calls `assemble` (open and migrate the database, build the watcher,
-`watch.Service.Prepare`, register the HTTP modules on one `http.ServeMux`) and runs the cycle job
-and the HTTP server in an `errgroup` until SIGINT/SIGTERM.
+- The hub starts `diario-alerr monitor` with its cookie variable. Started any other way, the binary
+  prints the SDK's `NOT_LAUNCHED_BY_HUB` text on stderr and exits 1.
+- Stdout carries only the handshake line. Logs go to stderr as JSON lines.
+- Start-up reads the configuration, checks that `pdftotext -v` runs, takes the database writer
+  lock, removes leftover PDFs, applies the migrations with `sea-orm-migration` on the lock's
+  connection, opens the pool, reads the newest issued `seq` and the newest stored alert, and
+  prepares the monitor state, all before the handshake. Each connection attempt has 10 s, and
+  sqlx retries a refused connection within them. `pdftotext -v` has 5 s, and the whole sequence
+  has 45 s, because the hub kills a monitor that has not answered in 60 s.
+- The `pdftotext` check exists because nothing else runs it until a new edition arrives. A hub
+  image without poppler, or with a broken one, shows up as a monitor that does not start instead of
+  one that fails on the next edition.
+- Leftover PDFs are files in `TMPDIR` named like the monitor's own downloads (`edition-`, six
+  letters or digits, `.pdf`). A process killed during a scan leaves one behind. Only one process
+  holds the lock, so after taking it the monitor deletes them. It deletes regular files only and
+  never follows a symbolic link. A failure is logged at `warn` and start-up goes on.
+- Exit code 0 means a clean stop (SIGTERM or SIGINT), with no `fatal` line. When the monitor exits
+  1 because of a configuration error, a failed start-up step or a lost database lock, it writes
+  exactly one JSON `fatal` line at `error` level. Its `error` field holds the configuration error,
+  names the start-up step that failed (for example `checking pdftotext: ...` or `acquiring the
+  database writer lock: ...`), or starts with `the database lock was lost`. A run outside the hub
+  and a failure to start logging or the async runtime also exit 1, without a `fatal` line. The hub
+  restarts the monitor with a backoff.
+- A query on the lock's connection every 0.5 s, with 10 s to answer, notices a lost lock (see
+  Persistence). The reason after `the database lock was lost: ` is `the lock's connection failed:
+  ...`, `the lock's connection did not answer within 10s` or `the lock's connection was replaced`.
+  A lock lost before the migrations stops the start the same way, under the step `applying the
+  database migrations`, and nothing is migrated.
+- A second process on the same database fails at start-up with `another diario-alerr process holds
+  the database lock` and migrates nothing.
+- `Describe` names the monitor `diario` with two event kinds: `welcome` (info) and `term_found`
+  (urgent). `Status` answers `FAILING` with the hub-ahead text below while the last `Events` call
+  found the hub ahead of the database. Otherwise it answers `CHECKING` during a cycle, `FAILING`
+  with a one-line message when the last cycle did not finish or the database does not answer, and
+  `IDLE` otherwise. That message is cut at 300 characters, and so is the `edition` log field,
+  because both can carry text from the gazette site such as an edition title. Errors built from
+  gazette data cut that text the same way (a `date_gmt`, a PDF URL, a JSON decoding message), so a
+  logged error stays far below the 64 KiB line the hub keeps. `Check` starts a cycle now, or
+  refuses with `a check is already running`.
+- The monitor serves `Watch` through the SDK's `serve`, which takes the notifier, so the hub polls
+  it as soon as something changes instead of every 15 s. The monitor signals:
+  - At start, with the `seq` of the newest alert stored at start-up. The SDK sends the current
+    value as the first signal of every `Watch` call.
+  - Right after each commit that inserts an alert, with that alert's `seq`. The store sends it
+    from `Store::record_edition`, so a failed commit signals nothing. The welcome alert has no
+    signal of its own: the signal at start and the one at the end of the first read cover it.
+  - When a cycle starts and when it ends. `status_scope` sends both signals, and sends the end
+    signal again however the cycle ends.
+  - When `Events` finds the hub ahead of the database, and when the two agree again.
+  - When the first read ends (below), with the `seq` of the newest stored alert.
 
-1. `Prepare` creates the single `monitor_state` row the first time: from `STATE_FILE` when it
-   exists, otherwise with the cursor at `START_AFTER` and a queued welcome alert.
-2. Each cycle lists the PDF editions published after `cursor - 24h`, drops the ones in
-   `seen_editions`, and scans the rest two at a time.
+  The SDK also sends a heartbeat every 30 s. On a signal the hub calls `Describe`, `Status` and
+  sometimes `Events`, but never `Check`, so a signal never makes the monitor call the gazette.
+  While the `Watch` call is down, the hub polls every 15 s. Signals carry the `seq` of a stored
+  alert, never the alert sequence's own value: a conflicting or rolled-back insert moves the
+  sequence past every stored alert, and a signal with that value would make the hub read `Events`
+  on every signal until the next alert.
+- `Events(after, limit)` returns the alerts with a `seq` above `after`, in order, exactly
+  `min(limit, available)` of them, except during the first read (next item). A `limit` of 0 means
+  100, and the maximum is 500. Each call acknowledges every alert up to `after`, and writes the
+  state row only when that position moves forward.
+- The first read stops at the newest `seq` that existed at start-up. Until one `Events` call
+  returns a page shorter than its limit, which is how the hub sees the end of a read, `Events`
+  leaves out every newer alert. After that call nothing is left out. This is for the hub's
+  baseline: the hub stores the first read of a monitor it does not know and never announces it,
+  and that read comes right after the monitor's process starts, on its first `Watch` signal, while
+  the first cycle records its alerts in a few seconds. Without the limit, whatever the first cycle
+  finds would be absorbed as history; on a take-over from the Go release, that means every edition
+  Go had not recorded yet. With it, those alerts go out as normal events right after the first
+  read ends, because the monitor signals the
+  hub then. On a new database the welcome alert is newer than that `seq`, so the hub announces it.
+- That limit belongs to one process. If the monitor restarts, alone or with the hub, after its first
+  cycle recorded alerts and before the hub's first read finished, the new process counts those
+  alerts as history: its boundary includes them and the baseline absorbs them. The same happens
+  when the hub received the short page but failed to store it. If anything restarts before the hub
+  logs `baseline complete` for `diario`, check by hand. Wait a minute after that line, then look in
+  the monitor's database for alerts at or below the acknowledged position that nobody was told about:
+
+  ```sql
+  SELECT a.seq, a.id, a.title, a.link, a.published_at, s.seen_at
+  FROM alerts a
+  LEFT JOIN seen_editions s ON a.id = 'edition-' || s.edition_id
+  WHERE a.seq <= (SELECT acked_seq FROM monitor_state)
+  ORDER BY a.seq DESC
+  LIMIT 20;
+  ```
+
+  `seen_at` is when the monitor recorded the edition, so the alerts recorded around the restart
+  stand out.
+- When the database is down, `Events` answers `UNAVAILABLE` and `Status` answers `FAILING`, both
+  with `the database is unavailable`, without the address or the password. Against a database
+  that refuses connections, sqlx keeps retrying for the 10 s allowed to get a connection, so
+  `Status` and `Events` take up to 10 s to answer, under the hub's 30 s limit per call. A cycle
+  then takes about 20 s, because the listing and the pruning after it each wait those 10 s. Its
+  failure (`could not list editions: the database is unavailable`) shows in `Status` about 30 s
+  after the cycle starts, since `Status` itself waits 10 s for the database.
+
+When `the hub is ahead of this database: reset the hub's position for this monitor` appears at
+`error` level, the hub asked for alerts after a `seq` this database never issued. That happens when
+the monitor's database was reset or replaced and the hub's stored position for `diario` was not.
+Until the two agree, `Events` returns no events and acknowledges nothing, and `Status` answers
+`FAILING` with that text. The first `Events` call that finds the two in line clears it. Reset both
+together. The monitor logs that line once per process.
+
+## Flow of a cycle
+
+The scheduler runs a cycle at start, then one interval after each cycle ends. `Check` starts one
+early.
+
+1. At start-up, `Monitor::prepare` creates the single `monitor_state` row the first time, with the
+   cursor at `START_AFTER` and a queued welcome alert.
+2. A cycle lists the PDF editions published after `cursor - 24h`, following `X-WP-TotalPages`,
+   drops the ones in `seen_editions`, and scans the rest two at a time: download, then
+   `pdftotext` with a 300 s limit.
 3. Results are recorded in publication order. Each edition is marked seen, the cursor only moves
    forward, and a match inserts an alert, all in one transaction. The first edition that fails to
    download or parse stops the recording, so it and the ones after it are retried next cycle.
    `last_success_at` is only written when the whole scan went through.
-4. Every enabled channel gets the alerts it has no row for in `alert_deliveries`, oldest first. A
-   failed send stops that channel until the next cycle and leaves the others alone.
-5. Pruning keeps the newest 1000 seen editions and the newest 100 alerts.
+4. Pruning keeps the newest 1000 seen editions. Alerts go only when the hub has acknowledged them
+   and they are not among the newest 100.
 
-`/healthz` answers 503 when the last successful scan (or the boot, before the first one) is older
-than three intervals. The feed lists the newest 100 alerts, newest first.
+The gazette client stops at four limits that the Go release did not have: 100 listing pages,
+4 MiB per listing page, 256 MiB per PDF, and 64 MiB of text from `pdftotext`. Each has its own
+error, which ends the cycle as incomplete. Every HTTP request has a total timeout of 60 s. It also
+refuses an edition whose `date_gmt` is before year 1. The Go release accepted year 0, but the hub
+cannot store such an event and would reject every page from then on.
 
-### Persistence
+## Persistence
 
-- A schema change is a new migration `sql/schema/0000N_name.sql` with `-- +goose Up`/`Down`.
-  **Never edit a migration that already exists.**
-- Queries live in `sql/queries/*.sql`; run `go tool sqlc generate` after changing them or the
-  schema and commit the regenerated `internal/db`. `timestamptz` maps to `time.Time` (`*time.Time`
-  when nullable), see `sqlc.yaml`.
-- Writes that must land together go through the repository's `inTx`.
+- The monitor reaches Postgres through SeaORM on sqlx. The tables are hand-written entities in
+  `src/store/entity/`. The migrations are `sea-orm-migration` modules in `src/migration/`, run in
+  the order of `Migrator::migrations`, and `seaql_migrations` records the ones applied.
+- The first migration, `m20261118_000001_goose_schema`, adopts the schema that goose built for 2.1
+  and the Go release. It reads `goose_db_version` in the current schema and runs the Up section of
+  each `sql/schema/` file that table has not recorded. A database without the table is new and
+  gets every file. It refuses a gap (a file not recorded while a higher version is) and a table
+  with no rows, accepts versions above 2, and never writes a goose row.
+- The second, `m20261118_000002_drop_go_tables`, drops `alert_deliveries` and `goose_db_version`
+  from that same schema, one statement each and without `CASCADE`. If another object depends on
+  one of them, the drop fails, nothing is dropped, and start-up stops with Postgres's error. 2.1
+  and the Go release no longer run on a database that went through it. Starting 2.1 on such a
+  database fails with `relation "monitor_state" already exists` and changes no data. It does leave
+  a new `goose_db_version` table with one version-0 row, which 2.2 ignores and never drops,
+  because the drop migration is already recorded. Drop it by hand.
+- **Upgrading from 2.1.** The first 2.2 start creates `seaql_migrations` and drops
+  `alert_deliveries` and `goose_db_version`. The monitor's role therefore needs `CREATE` on the
+  current schema and must own both tables, which 2.1 never needed after its own first start.
+  Without them the start fails with `permission denied` and changes nothing, but under the hub it
+  becomes a restart loop. Before the first 2.2 start, run these as the monitor's role:
+
+  ```sql
+  SELECT has_schema_privilege(current_user, current_schema(), 'CREATE');
+  SELECT tablename, tableowner FROM pg_tables
+  WHERE schemaname = current_schema() AND tablename IN ('alert_deliveries', 'goose_db_version');
+  ```
+
+  The first must return `t`, and the second must list both tables with the monitor's role as
+  `tableowner`. Take a `pg_dump` of the database before that start, because once 2.2 has run, 2.1
+  cannot use the database again.
+- A schema change is a new module in `src/migration/` and a new entry at the end of
+  `Migrator::migrations`. **Never edit a migration that already exists, nor the files in
+  `sql/schema/`**: they are the first migration's input.
+- Start-up runs the migrations on the writer lock's connection, in one transaction that first
+  checks that the connection still holds the lock. Each migration's own transaction becomes a
+  savepoint inside it, and a run that fails records nothing. No migration can leave that
+  transaction: `use_transaction(Some(false))` does not take it out, and a statement Postgres
+  refuses inside a transaction block, such as `CREATE INDEX CONCURRENTLY`, makes start-up fail.
+- The SQL lives in the store (`src/store.rs` and `src/store/`) and in the migrations
+  (`src/migration/`, which reads `sql/schema/`). Nothing inserts an alert outside the store's
+  methods. Every transaction that inserts an alert locks the state row first, so the order of
+  `seq` values is the order of the commits.
+- `Store::record_edition` signals the hub with the new alert's `seq` right after the commit that
+  inserted it, never before. A failed commit, or a record without a new alert, signals nothing.
+  `Store::initialize` writes the welcome alert without a signal.
+- The pool has 4 connections. Each one runs with a 20 s `statement_timeout` and a 5 s
+  `lock_timeout`, asks the server for TCP keepalives (`tcp_keepalives_idle=30`,
+  `tcp_keepalives_interval=10`, `tcp_keepalives_count=3`, `tcp_user_timeout=60000`, in ms), and
+  is tested before each use. Getting a connection has 10 s. The pool keeps no minimum, idle limit
+  or lifetime, so sqlx runs no maintenance task and `Store::new` works outside a runtime.
+- The writer lock (`pg_try_advisory_lock`) has a connection of its own, outside the pool, with the
+  same keepalives, no statement or lock timeout because the migrations run there, and
+  `client_min_messages=warning`. It is never tested before use: a failed test would quietly open a
+  new connection without the lock. Every 0.5 s, a query with 10 s to answer checks in `pg_locks`
+  that this connection still holds the lock. The monitor gives up on a silent connection after
+  about 10.5 s, and the server frees a vanished monitor's lock only after about 60 s, so the lock
+  cannot pass to a second copy while the first could still write.
+
+The database layer adds these lines to the log. None carries the address or a password.
+
+- At start-up, sea-orm-migration logs `Applying all pending migrations`, then `Applying migration
+  '<name>'` and `Migration '<name>' has been applied` for each one it runs, or `No pending
+  migrations`. The monitor then logs `database migrations applied` with the names it applied, which
+  is `[]` on every restart. Postgres's notices, such as the migration table's `already exists,
+  skipping`, stay out because of `client_min_messages=warning`; warnings and errors still show. To
+  see the notices, run the statements by hand in `psql`.
+- `there is no transaction in progress` (`warn`, `sqlx::postgres::notice`) follows a commit that
+  Postgres refused, because SeaORM sends a `ROLLBACK` after it.
+- `error occurred while testing the connection on-release` (`warn`) appears when a call is dropped
+  in the middle of a statement (the 10 s limit of `Status`, a cancelled `Events`) or a connection
+  is cut. sqlx then closes that connection.
+- `acquired connection, but time to acquire exceeded slow threshold` (`warn`) appears when getting
+  a connection took more than 2 s.

@@ -1,0 +1,106 @@
+[
+  {
+    "input": "ED &#8211; 1",
+    "output": "ED – 1"
+  },
+  {
+    "input": "&amp;",
+    "output": "&"
+  },
+  {
+    "input": "&amp;amp;",
+    "output": "&amp;"
+  },
+  {
+    "input": "&ndash;",
+    "output": "–"
+  },
+  {
+    "input": "&#x2013;",
+    "output": "–"
+  },
+  {
+    "input": "&#X2013;",
+    "output": "–"
+  },
+  {
+    "input": "&#8211",
+    "output": "–"
+  },
+  {
+    "input": "&#0;",
+    "output": "�"
+  },
+  {
+    "input": "&#128;",
+    "output": "€"
+  },
+  {
+    "input": "&#xD800;",
+    "output": "�"
+  },
+  {
+    "input": "&#1114112;",
+    "output": "�"
+  },
+  {
+    "input": "&notit;",
+    "output": "¬it;"
+  },
+  {
+    "input": "&amp",
+    "output": "&"
+  },
+  {
+    "input": "&ampx",
+    "output": "&x"
+  },
+  {
+    "input": "&Aacute;",
+    "output": "Á"
+  },
+  {
+    "input": "&aacute",
+    "output": "á"
+  },
+  {
+    "input": "&nbsp;",
+    "output": " "
+  },
+  {
+    "input": "&#39;",
+    "output": "'"
+  },
+  {
+    "input": "&unknown;",
+    "output": "&unknown;"
+  },
+  {
+    "input": "&",
+    "output": "&"
+  },
+  {
+    "input": "&;",
+    "output": "&;"
+  },
+  {
+    "input": "&#;",
+    "output": "&#;"
+  },
+  {
+    "input": "&#x;",
+    "output": "�"
+  },
+  {
+    "input": "&amp;ccedil;",
+    "output": "&ccedil;"
+  },
+  {
+    "input": "&amp;#231;",
+    "output": "&#231;"
+  },
+  {
+    "input": "DIARIO-ALE-RR-ED.-4763",
+    "output": "DIARIO-ALE-RR-ED.-4763"
+  }
+]
