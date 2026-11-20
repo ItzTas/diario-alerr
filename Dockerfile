@@ -48,11 +48,11 @@ RUN case "$TARGETARCH" in \
 
 FROM scratch
 
-COPY plugin.json /plugin/plugin.json
-COPY --from=build /out/diario-alerr /plugin/diario-alerr
+COPY monitor.json /monitor/monitor.json
+COPY --from=build /out/diario-alerr /monitor/diario-alerr
 
 USER 65532:65532
 
 HEALTHCHECK NONE
 
-ENTRYPOINT ["/plugin/diario-alerr"]
+ENTRYPOINT ["/monitor/diario-alerr"]
