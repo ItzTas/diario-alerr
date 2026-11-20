@@ -51,9 +51,9 @@ impl<G: Gazette> Scheduler<G> {
     }
 
     async fn run_once(&self) {
-        let _cycle = self.begin();
+        let cycle = self.begin();
         let outcome = self.cycle().await;
-        self.finish(outcome);
+        self.finish(outcome, cycle);
     }
 
     pub fn trigger(&self) -> bool {
@@ -88,7 +88,8 @@ impl<G: Gazette> Scheduler<G> {
         cycle.await.unwrap_or_else(crashed)
     }
 
-    fn finish(&self, outcome: CycleOutcome) {
+    // The scope drops when this returns, after the state is written and the lock released.
+    fn finish(&self, outcome: CycleOutcome, _cycle: StatusScope) {
         let mut state = self.lock_state();
         state.running = false;
         state.last_finished = Some(self.monitor.now());
