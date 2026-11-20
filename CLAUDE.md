@@ -232,8 +232,9 @@ The Go matcher (`internal/gazette/match.go`, last changed in `764b330`) is the s
   baseline: the hub stores the first read of a monitor it does not know and never announces it,
   and that read comes right after the monitor's process starts, on its first `Watch` signal, while
   the first cycle records its alerts in a few seconds. Without the limit, whatever the first cycle
-  finds would be absorbed as history; on a take-over from the Go release, that means every edition Go had not recorded yet. With it, those
-  alerts go out as normal events right after the first read ends, because the monitor signals the
+  finds would be absorbed as history; on a take-over from the Go release, that means every edition
+  Go had not recorded yet. With it, those alerts go out as normal events right after the first
+  read ends, because the monitor signals the
   hub then. On a new database the welcome alert is newer than that `seq`, so the hub announces it.
 - That limit belongs to one process. If the monitor restarts, alone or with the hub, after its first
   cycle recorded alerts and before the hub's first read finished, the new process counts those
