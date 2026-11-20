@@ -4,9 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, TimeDelta, Utc};
-use monitor_hub_plugin::Notifier;
-use monitor_hub_plugin::proto::plugin_server::Plugin;
-use monitor_hub_plugin::proto::{
+use monitor_hub_sdk::Monitor;
+use monitor_hub_sdk::Notifier;
+use monitor_hub_sdk::proto::{
     CheckRequest, CheckResponse, DescribeRequest, DescribeResponse, Event, EventKind,
     EventsRequest, EventsResponse, Severity, State, StatusRequest, StatusResponse,
 };
@@ -89,7 +89,7 @@ impl<G: Gazette> DiarioPlugin<G> {
             return;
         }
         let newest = self.newest_alert(last_issued).await;
-        self.notifier().notify(newest);
+        self.notifier().events_recorded(newest);
     }
 
     async fn newest_alert(&self, fallback: i64) -> i64 {
@@ -140,7 +140,7 @@ impl<G: Gazette> DiarioPlugin<G> {
 }
 
 #[tonic::async_trait]
-impl<G: Gazette> Plugin for DiarioPlugin<G> {
+impl<G: Gazette> Monitor for DiarioPlugin<G> {
     async fn describe(
         &self,
         _: Request<DescribeRequest>,
@@ -293,8 +293,8 @@ mod tests {
 
     use crate::postgres::database;
     use chrono::DateTime;
-    use monitor_hub_plugin::proto::plugin_server::Plugin;
-    use monitor_hub_plugin::proto::{EventsRequest, State, StatusRequest};
+    use monitor_hub_sdk::Monitor as _;
+    use monitor_hub_sdk::proto::{EventsRequest, State, StatusRequest};
     use serde_json::{Value, json};
     use tokio::net::TcpListener;
     use tokio::runtime::{Builder, Runtime};
@@ -418,7 +418,7 @@ mod tests {
         assert_eq!(
             manifest,
             json!({
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "name": "diario",
                 "command": ["diario-alerr", "plugin"],
                 "apk": ["poppler-utils"],

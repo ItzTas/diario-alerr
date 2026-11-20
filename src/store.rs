@@ -5,7 +5,7 @@ mod lock;
 use std::error::Error;
 
 use chrono::{DateTime, Utc};
-use monitor_hub_plugin::Notifier;
+use monitor_hub_sdk::Notifier;
 use sea_orm::sea_query::{Expr, ExprTrait, OnConflict, PgFunc};
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, ConnAcquireErr, ConnectionTrait, DatabaseConnection,
@@ -201,7 +201,7 @@ impl Store {
         let Some(seq) = inserted else {
             return Ok(None);
         };
-        self.notifier.notify(seq);
+        self.notifier.events_recorded(seq);
         Ok(Some(seq))
     }
 

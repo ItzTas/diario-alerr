@@ -18,7 +18,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use diario_alerr::store::{WRITER_LOCK_ID, acquire_writer_lock};
 use diario_alerr::timestamp::Clock;
-use monitor_hub_plugin::Signals;
+use monitor_hub_sdk::Signals;
 use sea_orm::{ConnectOptions, DatabaseConnection};
 use tokio::time::{Instant, sleep, timeout};
 use tokio_postgres::{Client, NoTls};

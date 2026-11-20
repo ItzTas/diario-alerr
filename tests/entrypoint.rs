@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use diario_alerr::domain::Alert;
 use diario_alerr::store::{Store, WRITER_LOCK_ID, acquire_writer_lock};
-use monitor_hub_plugin::NOT_LAUNCHED_BY_HUB;
+use monitor_hub_sdk::NOT_LAUNCHED_BY_HUB;
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio_postgres::{Client, NoTls};

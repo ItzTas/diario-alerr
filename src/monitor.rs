@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use futures_util::stream::{self, StreamExt};
-use monitor_hub_plugin::Notifier;
+use monitor_hub_sdk::Notifier;
 use tracing::{error, info, warn};
 
 use crate::alerts::{edition_alert, welcome_alert};

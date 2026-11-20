@@ -785,8 +785,8 @@ dependencies = [
  "chrono",
  "futures-util",
  "htmlize",
- "monitor-hub-plugin",
- "monitor-hub-plugin-testkit",
+ "monitor-hub-sdk",
+ "monitor-hub-sdk-testkit",
  "prost-types",
  "regex",
  "reqwest",
@@ -1773,9 +1773,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "monitor-hub-plugin"
-version = "0.3.0"
-source = "git+https://github.com/ItzTas/monitor-hub?tag=sdk-rust%2Fv0.3.0#cc1f0ce5231c5cb11875191b170665c6c7f9ec82"
+name = "monitor-hub-sdk"
+version = "0.4.0"
+source = "git+https://github.com/ItzTas/monitor-hub?tag=sdk-rust%2Fv0.4.0#bc92ef1960bb09992bca93f7140069ef71c9ec68"
 dependencies = [
  "chrono",
  "prost",
@@ -1793,14 +1793,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "monitor-hub-plugin-testkit"
-version = "0.3.0"
-source = "git+https://github.com/ItzTas/monitor-hub?tag=sdk-rust%2Fv0.3.0#cc1f0ce5231c5cb11875191b170665c6c7f9ec82"
+name = "monitor-hub-sdk-testkit"
+version = "0.4.0"
+source = "git+https://github.com/ItzTas/monitor-hub?tag=sdk-rust%2Fv0.4.0#bc92ef1960bb09992bca93f7140069ef71c9ec68"
 dependencies = [
- "monitor-hub-plugin",
+ "monitor-hub-sdk",
  "serde_json",
  "tokio",
- "tokio-postgres",
 ]
 
 [[package]]

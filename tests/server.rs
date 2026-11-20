@@ -11,8 +11,8 @@ use diario_alerr::scheduler::Scheduler;
 use diario_alerr::server::DiarioPlugin;
 use diario_alerr::store::{EditionRecord, Store};
 use diario_alerr::text::Hits;
-use monitor_hub_plugin::proto::plugin_server::Plugin;
-use monitor_hub_plugin::proto::{
+use monitor_hub_sdk::Monitor as _;
+use monitor_hub_sdk::proto::{
     CheckRequest, CheckResponse, DescribeRequest, Event, EventKind, EventsRequest, Severity, State,
     StatusRequest, StatusResponse,
 };

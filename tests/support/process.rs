@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use monitor_hub_plugin::{MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE};
+use monitor_hub_sdk::{MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE};
 use serde_json::Value;
 
 pub const COOKIE: (&str, &str) = (MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE);
@@ -184,7 +184,7 @@ fn collected(text: &Receiver<String>) -> String {
 
 fn handshake_socket(line: &str) -> Option<PathBuf> {
     let fields: Vec<&str> = line.trim().split('|').collect();
-    let ["1", "1", "unix", socket, "grpc"] = fields[..] else {
+    let ["1", "2", "unix", socket, "grpc"] = fields[..] else {
         return None;
     };
     Some(PathBuf::from(socket))

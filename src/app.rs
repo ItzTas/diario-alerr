@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use chrono::Utc;
-use monitor_hub_plugin::serve_with_notifier;
+use monitor_hub_sdk::serve;
 use tokio::time::{Instant, timeout_at};
 use tracing::info;
 
@@ -116,13 +116,13 @@ async fn serve_until_stopped(started: Started) -> anyhow::Result<()> {
         newest_alert,
     } = started;
     let notifier = monitor.notifier().clone();
-    notifier.notify(newest_alert);
+    notifier.events_recorded(newest_alert);
     let scheduler = Scheduler::new(Arc::new(monitor));
     let plugin =
         DiarioPlugin::new(Arc::clone(&scheduler)).with_first_read_boundary(first_read_boundary);
     let cycles = tokio::spawn(scheduler.run());
     let ended = tokio::select! {
-        served = serve_with_notifier(plugin, notifier) => served.context("serving the plugin"),
+        served = serve(plugin, notifier) => served.context("serving the plugin"),
         () = lock.closed() => Err(lock_lost(&lock)),
     };
     cycles.abort();

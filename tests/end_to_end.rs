@@ -9,7 +9,7 @@ use diario_alerr::gazette::{Client, HTTP_TIMEOUT};
 use diario_alerr::migration::{DROP_GO_TABLES, GOOSE_SCHEMA};
 use diario_alerr::monitor::{CycleOutcome, Monitor, MonitorOptions};
 use diario_alerr::store::{EditionRecord, SequencedAlert, Store};
-use monitor_hub_plugin::proto::{
+use monitor_hub_sdk::proto::{
     CheckRequest, CheckResponse, Event, EventsRequest, EventsResponse, WatchRequest, WatchResponse,
 };
 use tokio::time::{Instant, timeout_at};
@@ -197,7 +197,7 @@ async fn events(socket: &Path, after: i64, limit: i32) -> Vec<Event> {
         .await
         .unary(
             Request::new(EventsRequest { after, limit }),
-            PathAndQuery::from_static("/monitorhub.plugin.v1.Plugin/Events"),
+            PathAndQuery::from_static("/monitorhub.monitor.v1.Monitor/Events"),
             ProstCodec::<EventsRequest, EventsResponse>::default(),
         )
         .await
@@ -211,7 +211,7 @@ async fn watch(socket: &Path) -> Streaming<WatchResponse> {
         .await
         .server_streaming(
             Request::new(WatchRequest {}),
-            PathAndQuery::from_static("/monitorhub.plugin.v1.Plugin/Watch"),
+            PathAndQuery::from_static("/monitorhub.monitor.v1.Monitor/Watch"),
             ProstCodec::<WatchRequest, WatchResponse>::default(),
         )
         .await
@@ -224,7 +224,7 @@ async fn check(socket: &Path) -> CheckResponse {
         .await
         .unary(
             Request::new(CheckRequest {}),
-            PathAndQuery::from_static("/monitorhub.plugin.v1.Plugin/Check"),
+            PathAndQuery::from_static("/monitorhub.monitor.v1.Monitor/Check"),
             ProstCodec::<CheckRequest, CheckResponse>::default(),
         )
         .await

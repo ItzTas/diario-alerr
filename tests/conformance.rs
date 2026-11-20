@@ -8,7 +8,7 @@ use diario_alerr::domain::Alert;
 use diario_alerr::gazette::{Client, HTTP_TIMEOUT};
 use diario_alerr::monitor::{Monitor, MonitorOptions};
 use diario_alerr::store::{EditionRecord, Store};
-use monitor_hub_plugin_testkit::conformance::{Conformance, Outcome, run};
+use monitor_hub_sdk_testkit::conformance::{Conformance, Outcome, run};
 use tempfile::TempDir;
 
 use support::gazette_site::GazetteSite;
